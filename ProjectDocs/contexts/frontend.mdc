@@ -1,0 +1,192 @@
+Frontend Context (Next.js 15 + React 19) — Vercel Deploy + Vercel AI SDK UI
+
+Task Objective
+
+- Provide a clear, accurate reference for building and deploying the frontend on Vercel using Next.js 15 (App Router), React 19, and the Vercel AI SDK UI primitives.
+
+Current State Assessment
+
+- Frontend uses the App Router under `apps/frontend/app/` with a simple chat UI via `useChat` from `ai/react` and an API handler at `app/api/chat/route.ts` that proxies to the backend.
+- Packages include `next`, `react`, `react-dom`, `ai`, `@ai-sdk/openai`, and `zod` using latest versions.
+- The API route is configured for `edge` runtime and returns a `StreamingTextResponse` created from a JSON payload from the backend.
+
+Future State Goal
+
+- Ensure the frontend remains compatible with Vercel deployment and the Vercel AI SDK UI, with correct streaming behavior, environment configuration, and minimal, maintainable code.
+
+Key Conventions
+
+- Target Next.js 15 with App Router and React Server Components by default.
+- Use `ai` (Vercel AI SDK) for chat UI primitives. Prefer `useChat` for simple chat interfaces.
+- Keep client components minimal; render as much as possible on the server.
+- Keep files ≤150 lines when reasonable and refactor if they grow.
+- Prefer Edge Runtime for low-latency API routes unless Node APIs are required.
+
+Environment Variables
+
+- `NEXT_PUBLIC_BACKEND_URL`: Public URL of the backend (must be reachable from Vercel). Example: `https://your-backend.example.com`.
+- For local dev: use `.env.local` in the `apps/frontend` directory. For Vercel: set in Project Settings → Environment Variables.
+
+Vercel Deployment Notes
+
+1) Project Settings
+
+- Framework Preset: Next.js
+- Build Command: `next build`
+- Install Command: `pnpm i` or `npm i` (match repo tooling)
+- Output Directory: `.vercel/output` (managed by Next.js; no manual change needed)
+- Root Directory: `apps/frontend` if deploying the frontend app independently
+
+2) Edge Runtime Compatibility
+
+- The route at `app/api/chat/route.ts` uses `export const runtime = "edge";` which is compatible with Vercel Edge Functions.
+- Ensure any Node-only modules are not used in Edge runtime handlers.
+
+3) Streaming Behavior
+
+- If the backend returns JSON with a single `content` string, wrapping it in a `ReadableStream` and returning `new StreamingTextResponse(stream)` is acceptable.
+- If the backend supports Server-Sent Events (SSE) or chunked streaming, prefer piping the fetch body as a stream to `StreamingTextResponse` for true incremental updates.
+
+Recommended Package Set
+
+- `next@latest` (Next.js 15)
+- `react@latest` and `react-dom@latest` (React 19)
+- `ai@latest` and `@ai-sdk/openai@latest` (Vercel AI SDK + provider)
+- `zod@latest` (runtime validation)
+
+Minimal Chat UI with Vercel AI SDK UI
+
+```tsx
+"use client";
+import { useChat } from "ai/react";
+
+export function Chat() {
+  const { messages, input, handleInputChange, handleSubmit, isLoading } = useChat({
+    api: "/api/chat",
+    maxSteps: 4,
+  });
+
+  return (
+    <div className="p-6 max-w-2xl mx-auto space-y-4">
+      <h1 className="text-2xl font-semibold">Chat</h1>
+      <div className="space-y-2">
+        {messages.map((m) => (
+          <div key={m.id} className="rounded border p-2">
+            <div className="text-xs text-gray-500">{m.role}</div>
+            {m.toolInvocations ? (
+              <pre className="text-xs overflow-auto">{JSON.stringify(m.toolInvocations, null, 2)}</pre>
+            ) : (
+              <div>{m.content}</div>
+            )}
+          </div>
+        ))}
+      </div>
+      <form onSubmit={handleSubmit} className="flex gap-2">
+        <input
+          className="flex-1 border rounded px-3 py-2"
+          value={input}
+          onChange={handleInputChange}
+          placeholder="Say something..."
+        />
+        <button disabled={isLoading} className="border rounded px-3 py-2">Send</button>
+      </form>
+    </div>
+  );
+}
+```
+
+Minimal API Route Options
+
+Option A — Proxy to Backend (JSON → streamed text)
+
+```ts
+import { NextRequest } from "next/server";
+import { StreamingTextResponse } from "ai";
+
+export const runtime = "edge";
+export const maxDuration = 30;
+
+export async function POST(req: NextRequest) {
+  const { messages } = await req.json();
+  const backend = process.env.NEXT_PUBLIC_BACKEND_URL!;
+  const resp = await fetch(`${backend}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ messages }),
+  });
+  if (!resp.ok) return new Response(await resp.text(), { status: resp.status });
+  const data = await resp.json();
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(data.content ?? ""));
+      controller.close();
+    },
+  });
+  return new StreamingTextResponse(stream);
+}
+```
+
+Option B — True Streaming (if backend supports streaming)
+
+```ts
+import { NextRequest } from "next/server";
+import { StreamingTextResponse } from "ai";
+
+export const runtime = "edge";
+export const maxDuration = 30;
+
+export async function POST(req: NextRequest) {
+  const backend = process.env.NEXT_PUBLIC_BACKEND_URL!;
+  const upstream = await fetch(`${backend}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(await req.json()),
+  });
+  if (!upstream.ok) return new Response(await upstream.text(), { status: upstream.status });
+  return new StreamingTextResponse(upstream.body as ReadableStream);
+}
+```
+
+Using a Model Provider Directly (Optional)
+
+- If calling a model provider from the frontend API route, prefer the Vercel AI SDK server utilities (e.g., `streamText`) with a provider package like `@ai-sdk/openai`. Keep secrets on the server.
+
+```ts
+import { streamText } from "ai";
+import { openai } from "@ai-sdk/openai";
+
+export const runtime = "edge";
+
+export async function POST(req: Request) {
+  const { messages } = await req.json();
+  const result = await streamText({
+    model: openai("gpt-4o-mini"),
+    messages,
+  });
+  return result.toDataStreamResponse();
+}
+```
+
+Vercel Setup Checklist
+
+- Add `NEXT_PUBLIC_BACKEND_URL` in Vercel Project → Settings → Environment Variables.
+- If using provider calls from the API route, add provider keys (e.g., `OPENAI_API_KEY`) as Server Environment Variables (not public).
+- Ensure the project root for deployment is set to `apps/frontend`.
+- Confirm that the `edge` runtime route does not import Node-only modules.
+- Validate that responses stream correctly in Preview deployments before promoting to Production.
+
+Common Pitfalls & Fixes
+
+- Issue: API route works locally but fails on Vercel due to `http://localhost:...` backend URL.
+  - Fix: Set `NEXT_PUBLIC_BACKEND_URL` to the publicly accessible backend URL.
+- Issue: No streaming in UI.
+  - Fix: Ensure API returns `StreamingTextResponse` and consider piping upstream `Response.body` when using a streaming backend.
+- Issue: Node APIs used in Edge runtime.
+  - Fix: Remove Node-only modules or switch route to Node runtime by removing `export const runtime = "edge";`.
+
+Quality & Style
+
+- Strong TypeScript types, descriptive variable names, early returns, and small modules.
+- Favor server components; only use `"use client"` when interactivity is required.
+
