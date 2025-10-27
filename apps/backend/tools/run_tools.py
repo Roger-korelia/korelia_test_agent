@@ -20,9 +20,9 @@ os.environ.setdefault("KICAD_CLI", r"C:\Program Files\KiCad\8.0\bin\kicad-cli.ex
 # =========================
 # BINARIES RESOLVERS
 # =========================
-
+"""
 def _resolve_ngspice():
-    """Prefiere ngspice_con.exe en Windows; cae a env NGSPICE o PATH."""
+    "Prefiere ngspice_con.exe en Windows; cae a env NGSPICE o PATH."
     import shutil
     cand = os.getenv("NGSPICE")
     if cand:
@@ -34,7 +34,7 @@ def _resolve_ngspice():
     return None
 
 def _resolve_kicad_cli():
-    """Devuelve la ruta al binario de kicad-cli. Prioriza env var KICAD_CLI y si no, busca en PATH."""
+    "Devuelve la ruta al binario de kicad-cli. Prioriza env var KICAD_CLI y si no, busca en PATH."
     import shutil, platform
     
     # 1. Variable de entorno
@@ -63,7 +63,73 @@ def _resolve_kicad_cli():
                 return path
     
     return None
+"""
+def _resolve_ngspice():
+    """Resolve ngspice binary path - works in both local and Docker."""
+    import shutil
+    
+    # 1. Check environment variable first
+    env_path = os.getenv("NGSPICE")
+    if env_path and os.path.exists(env_path):
+        return env_path
+    
+    # 2. Check common Docker/Linux paths
+    docker_paths = [
+        "/usr/local/bin/ngspice",
+        "/usr/bin/ngspice",
+        "/opt/ngspice/bin/ngspice"
+    ]
+    
+    for path in docker_paths:
+        if os.path.exists(path):
+            return path
+    
+    # 3. Check Windows paths (for local development)
+    windows_paths = [
+        r"C:\Program Files\Spice64\bin\ngspice.exe",
+        r"C:\Program Files (x86)\Spice64\bin\ngspice.exe"
+    ]
+    
+    for path in windows_paths:
+        if os.path.exists(path):
+            return path
+    
+    # 4. Fallback to PATH search
+    return shutil.which("ngspice") or shutil.which("ngspice.exe")
 
+def _resolve_kicad_cli():
+    """Resolve kicad-cli binary path - works in both local and Docker."""
+    import shutil
+    
+    # 1. Check environment variable first
+    env_path = os.getenv("KICAD_CLI")
+    if env_path and os.path.exists(env_path):
+        return env_path
+    
+    # 2. Check common Docker/Linux paths
+    docker_paths = [
+        "/usr/bin/kicad-cli",
+        "/snap/bin/kicad-cli",
+        "/usr/local/bin/kicad-cli"
+    ]
+    
+    for path in docker_paths:
+        if os.path.exists(path):
+            return path
+    
+    # 3. Check Windows paths (for local development)
+    windows_paths = [
+        r"C:\Program Files\KiCad\8.0\bin\kicad-cli.exe",
+        r"C:\Program Files\KiCad\7.0\bin\kicad-cli.exe",
+        r"C:\Program Files (x86)\KiCad\8.0\bin\kicad-cli.exe"
+    ]
+    
+    for path in windows_paths:
+        if os.path.exists(path):
+            return path
+    
+    # 4. Fallback to PATH search
+    return shutil.which("kicad-cli") or shutil.which("kicad-cli.exe")
 # =========================
 # HELPER FUNCTIONS
 # =========================
