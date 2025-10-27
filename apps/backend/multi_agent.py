@@ -451,6 +451,12 @@ def orchestrator_node(state: WorkflowState) -> WorkflowState:
 
 def route_after_orchestrator(state: WorkflowState) -> str:
     step = state.get("workflow_step","spec")
+    intent = state["current_intent"]
+    
+    # Si el workflow está completado, terminar
+    if intent["overall_status"] == "completed":
+        return "END"
+    
     return {
         "spec": "spec_agent",
         "topology": "topology_agent",
@@ -797,6 +803,7 @@ def create_workflow_graph():
         "sim_agent": "sim_agent",
         "kicad_agent": "kicad_agent",
         "doc_agent": "doc_agent",
+        "END": END,  # ← AÑADIR ESTA LÍNEA
     })
     # tras cada nodo vuelve al orquestador (que decide avanzar/reintentar)
     for n in ["spec_agent","topology_agent","netlist_agent","sim_agent","kicad_agent","doc_agent"]:
