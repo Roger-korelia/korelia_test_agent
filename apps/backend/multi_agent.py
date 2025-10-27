@@ -13,14 +13,14 @@ from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage
-from langchain_core.prompts import ChatPromptTemplate
 from langgraph.graph import StateGraph, END
 from langchain.agents import create_agent
+from langchain.agents.structured_output import ToolStrategy
+
 
 # --- Esquemas ---
 from schema.spec_schema import SpecModel
 from schema.topology_schema import TopologyModel
-from schema.sizing_schema import SizingModel
 from schema.netlist_schema import NetlistModel
 # --- Toolkit (grafo) y herramientas externas
 #   Asegúrate de que estos módulos existen en tu repo
@@ -32,7 +32,6 @@ from tools.run_tools import (
     kicad_erc,
     kicad_drc,
 )
-from spice_toolkit import SpiceToolkit  # si usas un wrapper propio, ajusta el import
 
 
 # =========================================================
@@ -48,7 +47,7 @@ llm_base = ChatOpenAI(model="gpt-4.1-nano", temperature=0.1)
 # =========================================================
 # STATE MODELS (reflexivo + histórico)
 # =========================================================
-StepName = Literal["spec", "topology", "sizing", "netlist", "simulation", "kicad", "documentation"]
+StepName = Literal["spec", "topology", "netlist", "simulation", "kicad", "documentation"]
 
 class FeedbackItem(TypedDict):
     kind: Literal["error","warning","violation","info"]
@@ -112,7 +111,6 @@ def _new_intent(intent_id: str) -> IntentData:
         "steps": {
             "spec": _new_step(),
             "topology": _new_step(),
-            "sizing": _new_step(),
             "netlist": _new_step(),
             "simulation": _new_step(),
             "kicad": _new_step(),
@@ -125,20 +123,12 @@ def _new_intent(intent_id: str) -> IntentData:
 # THREAD REGISTRIES (separados) + Tools del grafo
 # =========================================================
 _GRAPH_THREADS: Dict[str, Toolkit] = {}
-_SPICE_THREADS: Dict[str, SpiceToolkit] = {}
 
 def _get_graph_toolkit(thread_id: str) -> Toolkit:
     tk = _GRAPH_THREADS.get(thread_id)
     if tk is None:
         tk = Toolkit()
         _GRAPH_THREADS[thread_id] = tk
-    return tk
-
-def _get_spice_toolkit(thread_id: str) -> SpiceToolkit:
-    tk = _SPICE_THREADS.get(thread_id)
-    if tk is None:
-        tk = SpiceToolkit(ground="0")
-        _SPICE_THREADS[thread_id] = tk
     return tk
 
 
@@ -159,7 +149,7 @@ def save_local_file(path: str, content: str, binary: str = "false") -> str:
 
 
 # =========================================================
-# Tools de grafo/JSON (spec/topology/sizing/netlist)
+# Tools de grafo/JSON (spec/topology/netlist)
 # =========================================================
 @tool("spec_schema_validator")
 def spec_schema_validator(spec_json: str, thread_id: str = "default") -> str:
@@ -180,16 +170,6 @@ def topology_schema_validator(topology_json: str, thread_id: str = "default") ->
     except Exception as e:
         return json.dumps({"ok": False, "errors": [f"JSON inválido: {e}"]}, ensure_ascii=False)
     return json.dumps(tk.apply_topology_json(payload), ensure_ascii=False)
-
-@tool("analytical_size_schema_validator")
-def analytical_size_schema_validator(sizing_json: str, thread_id: str = "default") -> str:
-    """Valida y aplica sizing.json (ESG + bindings). Devuelve {ok, errors[], graph_patch}."""
-    tk = _get_graph_toolkit(thread_id)
-    try:
-        payload = json.loads(sizing_json)
-    except Exception as e:
-        return json.dumps({"ok": False, "errors": [f"JSON inválido: {e}"]}, ensure_ascii=False)
-    return json.dumps(tk.apply_sizing_json(payload), ensure_ascii=False)
 
 @tool("graph_apply_netlist_json")
 def graph_apply_netlist_json(netlist_json: str, allow_autolock: str = "true", thread_id: str = "default") -> str:
@@ -213,7 +193,6 @@ _TOOL_REGISTRY: Dict[str, Any] = {
     # graph-first tools
     "spec_schema_validator": spec_schema_validator,
     "topology_schema_validator": topology_schema_validator,
-    "analytical_size_schema_validator": analytical_size_schema_validator,
     "graph_apply_netlist_json": graph_apply_netlist_json,
 
     # external EDA
@@ -238,14 +217,19 @@ class SubAgent:
         self.prompt = prompt
         self.tools = tools
 
+
 subagents = {
     "spec_agent": SubAgent(
         name="spec-agent",
         description="Genera especificaciones.",
         prompt=(
-            "Eres ingeniero de requisitos. Devuelve SOLO JSON válido con el esquema spec.json: "
-            "{design_id, metrics[], environment?, constraints[], standards[]}. "
-            "No inventes valores si no están en el enunciado; usa target=null."
+            f"Eres ingeniero de requisitos. Devuelve SOLO JSON válido que cumpla el schema de spec.json"
+            "INSTRUCCIONES CRÍTICAS:\n"
+            "1. Los objetos en arrays (metrics, constraints, standards) DEBEN ser objetos completos, NO strings.\n"
+            "2. Ejemplo CORRECTO: metrics debe ser [{id:'m1', name:'efficiency', target:null, priority:'should', acceptance:'...'}]\n"
+            "3. Ejemplo INCORRECTO: metrics=['efficiency', 'voltage']\n"
+            "4. Extrae TODOS los parámetros del task. Si no hay target, usa target:null.\n"
+            "5. Todos los campos requeridos (id, name, etc.) son obligatorios.\n"
         ),
         tools=["spec_schema_validator"],
     ),
@@ -258,16 +242,6 @@ subagents = {
             "No inventes clases fuera del catálogo."
         ),
         tools=["topology_schema_validator"],
-    ),
-    "analytical_sizer_agent": SubAgent(
-        name="analytical-size-agent",
-        description="Calcula valores iniciales.",
-        prompt=(
-            "Eres diseñador de circuitos. Calculas valores iniciales con fórmulas explícitas. "
-            "Devuelve SOLO sizing.json: {design_id, equations[], bindings[]}. "
-            "Usa variables con unidades y añade rationale."
-        ),
-        tools=["analytical_size_schema_validator"],
     ),
     "netlist_agent": SubAgent(
         name="netlist-agent",
@@ -303,7 +277,7 @@ subagents = {
         description="Genera informe de especificación y verificación.",
         prompt=(
             "Eres DocAgent. Con requisitos y resultados (SPICE/ERC/DRC), "
-            "genera un reporte final. Devuelve JSON con {status, report_path?}."
+            "genera un reporte final."
         ),
         tools=[],
     ),
@@ -313,6 +287,9 @@ subagents = {
 # =========================================================
 # Helpers de feedback/decisión
 # =========================================================
+
+# Esta función convierte la respuesta JSON de una herramienta en una lista de feedback (errores, advertencias, violaciones).
+# También marca como OK si no hay errores/advertencias/violaciones.
 def _feedback_from_tool_response(data: Dict[str, Any]) -> List[FeedbackItem]:
     out: List[FeedbackItem] = []
     for e in (data.get("errors") or []):
@@ -335,8 +312,12 @@ def _feedback_from_tool_response(data: Dict[str, Any]) -> List[FeedbackItem]:
         out.append({"kind":"info","message":"Validación OK", "context": {}})
     return out
 
+# Esta función determina si se puede avanzar en el flujo basándose en el resultado de una herramienta y el paso actual.
+# Para pasos que requieren validación (spec, topology), verifica que el resultado sea válido.
+# Para netlist, verifica violaciones y errores.
+# Para pasos que usan 'status' (simulación, KiCad, documentación), verifica que el status sea 'completed' o 'failed'.
 def _decide_proceed(data: Dict[str, Any], step: StepName) -> Tuple[bool, str]:
-    if step in ("spec","topology","sizing"):
+    if step in ("spec","topology"):
         if not isinstance(data, dict) or "ok" not in data:
             return False, "Respuesta no válida (falta 'ok')"
         if data["ok"] is False:
@@ -358,6 +339,9 @@ def _decide_proceed(data: Dict[str, Any], step: StepName) -> Tuple[bool, str]:
         return False, data.get("error","Fallo")
     return True, "OK"
 
+
+# Esta función procesa e integra un nuevo intento de ejecución de un paso (step) en el workflow.
+# Actualiza el estado del intento, el feedback, el historial y determina si es posible avanzar en el flujo.
 def _push_attempt(state: WorkflowState, step: StepName, payload_in: Optional[str], tool_output_str: str):
     intent = state["current_intent"]
     s = intent["steps"][step]
@@ -365,6 +349,7 @@ def _push_attempt(state: WorkflowState, step: StepName, payload_in: Optional[str
         parsed = json.loads(tool_output_str)
     except Exception:
         parsed = {"ok": False, "errors": ["Tool devolvió respuesta no JSON"], "raw": tool_output_str}
+
     fb = _feedback_from_tool_response(parsed)
     ok, fb_note = _decide_proceed(parsed, step)
 
@@ -379,13 +364,14 @@ def _push_attempt(state: WorkflowState, step: StepName, payload_in: Optional[str
         "ok": ok,
         "feedback": fb
     })
+
     s["status"] = "completed" if ok else ("needs_improvement" if fb else "failed")
 
     intent["total_attempts"] += 1
     state["should_proceed"] = ok
     state["agent_feedback"] = fb_note
 
-    if not ok and step in ("spec","topology","sizing","netlist"):
+    if not ok and step in ("spec", "topology", "netlist"):
         intent["overall_status"] = "needs_improvement"
     elif all(intent["steps"][k]["status"] == "completed" for k in intent["steps"]):
         intent["overall_status"] = "completed"
@@ -395,46 +381,72 @@ def _push_attempt(state: WorkflowState, step: StepName, payload_in: Optional[str
 # Orquestador y routing
 # =========================================================
 MAX_RETRIES: Dict[StepName, int] = {
-    "spec": 3, "topology": 3, "sizing": 3, "netlist": 4, "simulation": 2, "kicad": 2, "documentation": 1
+    "spec": 3, "topology": 3, "netlist": 4, "simulation": 2, "kicad": 2, "documentation": 1
 }
 
+
+# Esta función determina el siguiente paso en el flujo basándose en el paso actual.
 def _next_step(step: StepName) -> StepName:
-    order = ["spec","topology","sizing","netlist","simulation","kicad","documentation"]
+    order = ["spec","topology","netlist","simulation","kicad","documentation"]
     i = order.index(step)
     return order[min(i+1, len(order)-1)]
 
+# Esta función gestiona el flujo de ejecución del workflow.
+# Verifica si se puede avanzar en el flujo, reintenta si es necesario y termina si se agotan los reintentos.
 def orchestrator_node(state: WorkflowState) -> WorkflowState:
     step = state.get("workflow_step","spec")
     intent = state["current_intent"]
     s = intent["steps"][step]
-    print(f"🎯 ORCHESTRATOR: step={step} attempts={s['attempts']} status={s['status']} should_proceed={state.get('should_proceed')}")
+    
+    # Si el flujo ya está completado, no hacer nada más
+    if intent["overall_status"] == "completed":
+        return state
 
-    if state.get("should_proceed", True):
+    # Verificar si el paso actual está completado antes de avanzar
+    if state.get("should_proceed", True) and s["status"] == "completed":
         nxt = _next_step(step)
+        
+        # Si ya estamos en documentación y está completado, terminar
+        if step == "documentation" and s["status"] == "completed":
+            state["workflow_step"] = "documentation"
+            state["should_proceed"] = False  # Terminar el flujo
+            intent["overall_status"] = "completed"  # Marcar como completado
+            return state
+        
+        # Verificar que el siguiente paso no está ya completado
+        next_step_data = intent["steps"][nxt]
+        if next_step_data["status"] == "completed":
+            nxt = _next_step(nxt)
+        
         state["workflow_step"] = nxt
-        print(f"➡️ AVANZAR: {step} → {nxt}")
+        state["should_proceed"] = True  # Reset para el nuevo paso
         return state
 
     # No procede: reintentar si quedan retries
-    retries_left = MAX_RETRIES[step] - s["attempts"]
-    if retries_left > 0:
-        state["workflow_step"] = step
-        print(f"🔁 REINTENTAR: {step} (quedan {retries_left}) | feedback={state.get('agent_feedback')}")
+    if not state.get("should_proceed", True):
+        retries_left = MAX_RETRIES[step] - s["attempts"]
+        if retries_left > 0:
+            state["workflow_step"] = step
+            state["should_proceed"] = True  # Reset para reintentar
+            return state
+
+    # Si no hay intentos, es primera vez o reintento automático
+    if s["attempts"] == 0:
+        state["should_proceed"] = True  # Primera ejecución
         return state
 
     # Fallback si se agotaron intentos
     if step in ("netlist","simulation"):
-        print("↩️ fallback: volver a netlist si la simulación falla repetidamente")
         state["workflow_step"] = "netlist"
         state["should_proceed"] = False
         state["agent_feedback"] = "Simulación fallida repetidamente; ajusta netlist."
         return state
 
+    # Si se agotaron reintentos, ir a documentación y terminar
     intent["overall_status"] = "failed"
     state["workflow_step"] = "documentation"
     state["should_proceed"] = True
     state["agent_feedback"] = f"Se agotaron reintentos en {step}. Generar informe."
-    print(f"⛔ SIN RETRIES en {step} → documentación")
     return state
 
 def route_after_orchestrator(state: WorkflowState) -> str:
@@ -442,7 +454,6 @@ def route_after_orchestrator(state: WorkflowState) -> str:
     return {
         "spec": "spec_agent",
         "topology": "topology_agent",
-        "sizing": "analytical_sizer_agent",
         "netlist": "netlist_agent",
         "simulation": "sim_agent",
         "kicad": "kicad_agent",
@@ -452,10 +463,8 @@ def route_after_orchestrator(state: WorkflowState) -> str:
 
 # ====== CONTEXTO SIMPLE PARA SUBAGENTES ======
 
-import json
-from typing import List, Dict, Any, Literal
 
-StepName = Literal["spec","topology","sizing","netlist","simulation","kicad","documentation"]
+StepName = Literal["spec","topology","netlist","simulation","kicad","documentation"]
 
 def _clip_text(s: str, max_chars: int) -> str:
     if len(s) <= max_chars: 
@@ -472,7 +481,7 @@ def _brief_workflow_state(state: Dict[str, Any],
     - Recorta longitud total a 'max_chars'
     """
     if steps is None:
-        steps = ["spec","topology","sizing","netlist","simulation","kicad","documentation"]
+        steps = ["spec","topology","netlist","simulation","kicad","documentation"]
 
     ci = state.get("current_intent", {})
     out: Dict[str, Any] = {
@@ -526,87 +535,125 @@ def spec_agent_node(state: WorkflowState) -> WorkflowState:
 
     ctx = _brief_workflow_state(state, steps=["spec"], max_history_per_step=2, max_chars=2500)
 
+    # Creamos el prompt de sistema con TODO el contexto incluido
+    system_prompt = subagents["spec_agent"].prompt + "\n\n" + ctx + "\n\nTU TAREA: Genera 'spec.json' basándote en el design_task mostrado arriba. Devuelve SOLO JSON sin texto adicional."
+    
     agent = create_agent(
         model=llm_base,
         tools=[ _TOOL_REGISTRY["spec_schema_validator"] ],
-        system_prompt=subagents["spec_agent"].prompt + "\n\n" + ctx + f"\n\nGenera 'spec.json' para: {task}\nDevuelve SOLO JSON."
+        system_prompt=system_prompt,
+        response_format=ToolStrategy(SpecModel)
     )
     try:
-        result = agent.invoke({"input": f"Genera spec.json para: {task}"})
-        output_str = result.get("output", str(result))
-        _push_attempt(state, "spec", payload_in=task, tool_output_str=output_str)
+        # El input ahora es explícito y completo
+        result = agent.invoke({
+            "messages": [{"role": "user", "content": f"TASK: {task}\n\nGenera spec.json válido siguiendo el esquema. Extrae todos los parámetros posibles del task."}]
+        })
+         # Obtener la respuesta estructurada
+        structured_response = result.get("structured_response")
+        if structured_response:
+            # Convertir el modelo Pydantic a JSON string para la tool
+            spec_json = structured_response.model_dump_json()
+            # Llamar manualmente a la tool de validación
+            validation_result = _TOOL_REGISTRY["spec_schema_validator"].invoke({
+                "spec_json": spec_json,
+                "thread_id": "default"
+            })
+            _push_attempt(state, "spec", payload_in=task, tool_output_str=validation_result)
+        else:
+            # Fallback si no hay structured_response
+            output_str = result.get("output", str(result))
+            _push_attempt(state, "spec", payload_in=task, tool_output_str=output_str)
     except Exception as e:
+        import traceback
         _push_attempt(state, "spec", payload_in=task, tool_output_str=json.dumps({"ok":False,"errors":[str(e)]}))
     return state
 
-# ====== TOPOLOGY ======
 def topology_agent_node(state: WorkflowState) -> WorkflowState:
     task = state.get("current_task","")
     state["current_intent"]["steps"]["topology"]["status"] = "in_progress"
 
-    # pasamos spec + topology previos
-    ctx = _brief_workflow_state(state, steps=["spec","topology"], max_history_per_step=2, max_chars=3000)
+    # Verificar que spec esté completado
+    spec_step = state["current_intent"]["steps"]["spec"]
+    if spec_step["status"] != "completed":
+        _push_attempt(state, "topology", payload_in="waiting_for_spec", tool_output_str=json.dumps({"ok":False,"errors":["Spec no completado"]}))
+        return state
 
+    ctx = _brief_workflow_state(state, steps=["spec","topology"], max_history_per_step=2, max_chars=3000)
+    system_prompt = subagents["topology_agent"].prompt + "\n\n" + ctx + "\n\nTU TAREA: Genera 'topology.json' coherente con el spec mostrado arriba. Devuelve SOLO JSON sin texto adicional."
+    
     agent = create_agent(
         model=llm_base,
-        tools=[ _TOOL_REGISTRY["topology_schema_validator"] ],
-        system_prompt=subagents["topology_agent"].prompt + "\n\n" + ctx + "\n\nGenera 'topology.json' coherente con spec. Devuelve SOLO JSON."
+        tools=[_TOOL_REGISTRY["topology_schema_validator"]],
+        system_prompt=system_prompt,
+        response_format=ToolStrategy(TopologyModel)
     )
+    
     try:
-        result = agent.invoke({"input": f"Genera topology.json para: {task}"})
-        output_str = result.get("output", str(result))
-        _push_attempt(state, "topology", payload_in=task, tool_output_str=output_str)
+        result = agent.invoke({
+            "messages": [{"role": "user", "content": f"TASK: {task}\n\nGenera topology.json válido basándote en el spec y el design_task. Devuelve SOLO JSON."}]
+        })
+        
+        structured_response = result.get("structured_response")
+        if structured_response:
+            topology_json = structured_response.model_dump_json()
+            validation_result = _TOOL_REGISTRY["topology_schema_validator"].invoke({
+                "topology_json": topology_json,
+                "thread_id": "default"
+            })
+            
+            _push_attempt(state, "topology", payload_in=task, tool_output_str=validation_result)
+        else:
+            output_str = result.get("output", str(result))
+            _push_attempt(state, "topology", payload_in=task, tool_output_str=output_str)
+            
     except Exception as e:
         _push_attempt(state, "topology", payload_in=task, tool_output_str=json.dumps({"ok":False,"errors":[str(e)]}))
+    
     return state
 
-# ====== SIZING ======
-def analytical_sizer_agent_node(state: WorkflowState) -> WorkflowState:
-    task = state.get("current_task","")
-    state["current_intent"]["steps"]["sizing"]["status"] = "in_progress"
-
-    # pasamos spec + topology + sizing previos
-    ctx = _brief_workflow_state(state, steps=["spec","topology","sizing"], max_history_per_step=2, max_chars=3200)
-
-    agent = create_agent(
-        model=llm_base,
-        tools=[ _TOOL_REGISTRY["analytical_size_schema_validator"] ],
-        system_prompt=subagents["analytical_sizer_agent"].prompt + "\n\n" + ctx + "\n\nGenera 'sizing.json' usando ecuaciones explícitas. Devuelve SOLO JSON."
-    )
-    try:
-        result = agent.invoke({"input": f"Genera sizing.json para: {task}"})
-        output_str = result.get("output", str(result))
-        _push_attempt(state, "sizing", payload_in=task, tool_output_str=output_str)
-    except Exception as e:
-        _push_attempt(state, "sizing", payload_in=task, tool_output_str=json.dumps({"ok":False,"errors":[str(e)]}))
-    return state
-
-# ====== NETLIST (con feedback previo) ======
 def netlist_agent_node(state: WorkflowState) -> WorkflowState:
     task = state.get("current_task","")
     state["current_intent"]["steps"]["netlist"]["status"] = "in_progress"
 
-    # pasamos todo lo anterior + netlist previo para que vea violaciones/errores
     ctx = _brief_workflow_state(
         state,
-        steps=["spec","topology","sizing","netlist"],
+        steps=["spec","topology","netlist"],
         max_history_per_step=3,
         max_chars=4000
     )
 
+    system_prompt = subagents["netlist_agent"].prompt + "\n\n" + ctx + "\n\nTU TAREA: Construye y valida 'netlist.json' basándote en spec ytopology. Si hay violations/errors previos, corrígelos. Devuelve SOLO JSON."
+
     agent = create_agent(
         model=llm_base,
-        tools=[ _TOOL_REGISTRY["graph_apply_netlist_json"] ],
-        system_prompt=subagents["netlist_agent"].prompt + "\n\n" + ctx + "\n\nConstruye y valida 'netlist.json'. Si hay violations/errors previos, corrígelos. Devuelve SOLO JSON."
+        tools=[_TOOL_REGISTRY["graph_apply_netlist_json"]],
+        system_prompt=system_prompt,
+        response_format=ToolStrategy(NetlistModel)
     )
+    
     try:
-        result = agent.invoke({"input": "Construye y valida netlist.json"})
-        output_str = result.get("output", str(result))
-        _push_attempt(state, "netlist", payload_in="netlist_build", tool_output_str=output_str)
+        result = agent.invoke({
+            "messages": [{"role": "user", "content": f"TASK: {task}\n\nConstruye y valida netlist.json. Si hay errores previos, corrígelos. Devuelve SOLO JSON."}]
+        })
+        
+        structured_response = result.get("structured_response")
+        if structured_response:
+            netlist_json = structured_response.model_dump_json()
+            validation_result = _TOOL_REGISTRY["graph_apply_netlist_json"].invoke({
+                "netlist_json": netlist_json,
+                "allow_autolock": "true",
+                "thread_id": "default"
+            })
+            _push_attempt(state, "netlist", payload_in="netlist_build", tool_output_str=validation_result)
+        else:
+            output_str = result.get("output", str(result))
+            _push_attempt(state, "netlist", payload_in="netlist_build", tool_output_str=output_str)
+            
     except Exception as e:
         _push_attempt(state, "netlist", payload_in="netlist_build", tool_output_str=json.dumps({"ok":False,"errors":[str(e)]}))
+    
     return state
-
 
 def sim_agent_node(state: WorkflowState) -> WorkflowState:
     step = "simulation"
@@ -631,14 +678,19 @@ def sim_agent_node(state: WorkflowState) -> WorkflowState:
         max_chars=3500
     )
 
+    system_prompt = subagents["simulation_agent"].prompt + "\n\n" + ctx + "\n\nTU TAREA: Ejecuta la simulación SPICE usando el netlist aprobado. Devuelve SOLO JSON con el formato {status, kpis?, log?}. Si falla, explica la causa en 'log'."
+
     sim_agent = create_agent(
         model=llm_base,
         tools=[ _TOOL_REGISTRY["spice_autorun"] ],
-        system_prompt=subagents["simulation_agent"].prompt + "\n\n" + ctx + "\n\nEjecuta la simulación SPICE usando el netlist aprobado y devuelve SOLO JSON con el formato {status, kpis?, log?}. Si falla, explica la causa en 'log'."
+        system_prompt=system_prompt
     )
 
+    task = state.get("current_task","")
     try:
-        res = sim_agent.invoke({"input": "spice_run"})
+        res = sim_agent.invoke({
+            "messages": [{"role": "user", "content": f"TASK: {task}\n\nEjecuta la simulación SPICE con el netlist aprobado. Devuelve SOLO JSON."}]
+        })
         output_str = res.get("output", str(res))
         _push_attempt(state, step, payload_in="spice_run", tool_output_str=output_str)
     except Exception as e:
@@ -658,6 +710,8 @@ def kicad_agent_node(state: WorkflowState) -> WorkflowState:
         max_chars=3800
     )
 
+    system_prompt = subagents["kicad_agent"].prompt + "\n\n" + ctx + "\n\nTU TAREA: Crea el proyecto en KiCad y ejecuta ERC (y DRC si procede). Devuelve SOLO JSON con {status, artifacts?, log?}. Si falta kicad-cli, informa en 'log' y status='failed'."
+
     kicad_agent = create_agent(
         model=llm_base,
         tools=[
@@ -667,11 +721,14 @@ def kicad_agent_node(state: WorkflowState) -> WorkflowState:
             _TOOL_REGISTRY["kicad_drc"],
             _TOOL_REGISTRY["save_local_file"],
         ],
-        system_prompt=subagents["kicad_agent"].prompt + "\n\n" + ctx + "\n\nCrea el proyecto en KiCad y ejecuta ERC (y DRC si procede). Devuelve SOLO JSON con {status, artifacts?, log?}. Si falta kicad-cli, informa en 'log' y status='failed'."
+        system_prompt=system_prompt
     )
 
+    task = state.get("current_task","")
     try:
-        res = kicad_agent.invoke({"input": "kicad_flow"})
+        res = kicad_agent.invoke({
+            "messages": [{"role": "user", "content": f"TASK: {task}\n\nCrea el proyecto en KiCad y ejecuta ERC/DRC. Devuelve SOLO JSON."}]
+        })
         output_str = res.get("output", str(res))
         _push_attempt(state, step, payload_in="kicad_flow", tool_output_str=output_str)
     except Exception as e:
@@ -682,9 +739,40 @@ def kicad_agent_node(state: WorkflowState) -> WorkflowState:
 def doc_agent_node(state: WorkflowState) -> WorkflowState:
     step = "documentation"
     state["current_intent"]["steps"][step]["status"] = "in_progress"
-    # Aquí podrías generar un informe real; para ejemplo, marcamos completado.
-    report = {"status": "completed", "report_path": "reports/final_report.md"}
-    _push_attempt(state, step, payload_in="doc_flow", tool_output_str=json.dumps(report, ensure_ascii=False))
+    # Contexto: netlist + simulation + kicad (para ver artefactos previos/errores)
+    ctx = _brief_workflow_state(
+        state,
+        steps=["spec","topology","netlist","simulation","kicad","documentation"],
+        max_history_per_step=2,
+        max_chars=3800
+    )
+    system_prompt = subagents["doc_agent"].prompt + "\n\n" + ctx + "\n\nTU TAREA: Genera un informe final del proyecto."
+    doc_agent = create_agent(
+        model=llm_base,
+        tools=[],
+        system_prompt=system_prompt
+    )
+    task = state.get("current_task","")
+    try:
+        response = doc_agent.invoke({"messages": [{"role": "user", "content": f"TASK: {task}\n\nGenera un informe final del proyecto."}]})
+
+        # response can be an AIMessage, a dict, or FewShotOutput depending on LangChain version/config.
+        # Most modern LC returns a dict with 'output', or an AIMessage with .content
+        # Let's try to be robust:
+
+        # Extrae solo el contenido del mensaje AI y lo muestra en un formato claro.
+        if isinstance(response, AIMessage):
+            output_str = response.content
+        elif isinstance(response, dict):
+            # LangChain puede devolver 'output' o 'content' según la versión/configuración
+            output_str = response.get("output") or response.get("content") or str(response)
+        else:
+            output_str = getattr(response, "content", str(response))
+        print(f"DocAgent AIMessage content:\n{output_str}")
+
+        _push_attempt(state, step, payload_in="doc_flow", tool_output_str=output_str)
+    except Exception as e:
+        _push_attempt(state, step, payload_in="doc_flow", tool_output_str=json.dumps({"status":"failed","error":str(e)}))
     return state
 
 
@@ -696,7 +784,6 @@ def create_workflow_graph():
     g.add_node("orchestrator", orchestrator_node)
     g.add_node("spec_agent", spec_agent_node)
     g.add_node("topology_agent", topology_agent_node)
-    g.add_node("analytical_sizer_agent", analytical_sizer_agent_node)
     g.add_node("netlist_agent", netlist_agent_node)
     g.add_node("sim_agent", sim_agent_node)
     g.add_node("kicad_agent", kicad_agent_node)
@@ -706,14 +793,13 @@ def create_workflow_graph():
     g.add_conditional_edges("orchestrator", route_after_orchestrator, {
         "spec_agent": "spec_agent",
         "topology_agent": "topology_agent",
-        "analytical_sizer_agent": "analytical_sizer_agent",
         "netlist_agent": "netlist_agent",
         "sim_agent": "sim_agent",
         "kicad_agent": "kicad_agent",
         "doc_agent": "doc_agent",
     })
     # tras cada nodo vuelve al orquestador (que decide avanzar/reintentar)
-    for n in ["spec_agent","topology_agent","analytical_sizer_agent","netlist_agent","sim_agent","kicad_agent","doc_agent"]:
+    for n in ["spec_agent","topology_agent","netlist_agent","sim_agent","kicad_agent","doc_agent"]:
         g.add_edge(n, "orchestrator")
     return g.compile()
 

@@ -7,7 +7,6 @@ from graph.patcher import apply_patch
 from rules.engine import run_rulesets
 from schema.spec_schema import SpecModel
 from schema.topology_schema import TopologyModel
-from schema.sizing_schema import SizingModel
 from schema.netlist_schema import NetlistModel
 
 class Toolkit:
@@ -53,24 +52,6 @@ class Toolkit:
         apply_patch(self.store, patch)
         return {"ok": True, "errors": [], "graph_patch": patch}
 
-    def apply_sizing_json(self, sizing: Dict[str, Any]) -> Dict[str, Any]:
-        try:
-            model = SizingModel(**sizing)
-        except ValidationError as e:
-            return {"ok": False, "errors": json.loads(e.json()), "graph_patch": None}
-        ops = []
-        for eq in model.equations:
-            ops.append({"op":"add_node","node":{"id": eq.id, "type":"Equation",
-                                                "props":{"equation_latex": eq.equation_latex,
-                                                         "variables":[v.dict() for v in eq.variables],
-                                                         "result": eq.result,
-                                                         "rationale": eq.rationale},
-                                                "labels":["ESG"]}})
-        for b in model.bindings:
-            ops.append({"op":"update_node","node":{"id": b.target_ref, "props": {b.param: b.value}}})
-        patch = {"namespace":"ESG","ops":ops}
-        apply_patch(self.store, patch)
-        return {"ok": True, "errors": [], "graph_patch": patch}
 
     def apply_netlist_json(self, netlist: Dict[str, Any]) -> Dict[str, Any]:
         try:

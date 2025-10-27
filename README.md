@@ -1,64 +1,73 @@
 # Korelia Agent
 
-A full-stack AI agent application for circuit design and analysis, built with Next.js 15, React 19, and Python FastAPI. This project provides a multi-agent system with SPICE netlist parsing, graph-based validation, and real-time pipeline management.
+A full-stack AI agent application for circuit design and analysis, built with Next.js 15, React 19, and Python FastAPI. This project provides a multi-agent system with graph-based validation, real-time pipeline management, and comprehensive circuit design tools.
 
 ## 🚀 Features
 
-- **Multi-Agent System**: Specialized AI agents for circuit design (spec, topology, netlist, analytical sizing)
-- **SPICE Toolkit**: Advanced parser with graph-based validation and ERC/DRC rules
-- **Graph-Based Validation**: Automatic topology checking with deterministric ERC/DRC rules
-- **Layered Netlist Builder**: Incremental circuit construction with validation
+- **Multi-Agent System**: Specialized AI agents for circuit design (spec, topology, netlist)
+- **Graph-Based Validation**: Automatic topology checking with deterministic ERC/DRC rules
+- **Circuit Design Pipeline**: Complete workflow from specifications to KiCad integration
 - **Modern Frontend**: Next.js 15 with React 19 and App Router
 - **Real-time Pipeline**: Visual pipeline creation and monitoring with WebSocket streaming
 - **Modern UI**: Tailwind CSS with Shadcn UI components
 - **Type Safety**: Full TypeScript implementation
 - **Docker Support**: Containerized development and deployment
+- **KiCad Integration**: Direct integration with KiCad CLI tools
+- **SPICE Simulation**: NGSpice integration for circuit simulation
 
 ## 📁 Project Structure
 
 ```
 Korelia_agent/
 ├── apps/
-│   ├── frontend/          # Next.js 15 application
-│   │   ├── app/           # App Router pages and API routes
-│   │   │   ├── api/       # API routes (chat, pipeline)
-│   │   │   ├── chat/      # Chat interface
-│   │   │   └── projects/  # Project management
-│   │   ├── types/         # TypeScript type definitions
-│   │   └── package.json   # Frontend dependencies
-│   └── backend/           # Python FastAPI backend
-│       ├── main.py        # FastAPI application entry
-│       ├── multi_agent.py # Multi-agent orchestration
-│       ├── spice_toolkit.py # SPICE parser & validation
-│       ├── agents/        # Specialized AI agents
-│       │   ├── spec_agent.py
-│       │   ├── topology_agent.py
-│       │   ├── netlist_agent.py
-│       │   └── analytical_sizer_agent.py
-│       ├── graph/         # Graph-based validation
-│       │   ├── context.py
-│       │   ├── patcher.py
-│       │   ├── validators.py
-│       │   ├── rulesets.py
-│       │   └── store.py
-│       ├── rules/         # Circuit validation rules
-│       │   ├── engine.py
-│       │   ├── base.py
-│       │   └── power_base.py
-│       ├── schema/        # Schema definitions
-│       │   ├── netlist_schema.py
-│       │   ├── topology_schema.py
-│       │   ├── sizing_schema.py
-│       │   └── violations_schema.py
-│       ├── tools/         # Agent tools
-│       │   ├── run_tools.py
-│       │   └── tools_graph.py
-│       └── requirements.txt
-├── ProjectDocs/           # Project documentation
-│   ├── Build_Notes/       # Development progress tracking
-│   └── contexts/          # Project context files
-├── docker-compose.yaml   # Multi-service orchestration
-└── README.md
+│   ├── frontend/                    # Next.js 15 application
+│   │   ├── app/                     # App Router pages and API routes
+│   │   │   ├── api/                 # API routes
+│   │   │   │   ├── chat/            # Chat API endpoint
+│   │   │   │   └── pipeline/        # Pipeline management API
+│   │   │   ├── chat/                # Chat interface page
+│   │   │   ├── projects/            # Project management pages
+│   │   │   │   └── [id]/            # Dynamic project pages
+│   │   │   ├── globals.css          # Global styles
+│   │   │   ├── layout.tsx           # Root layout
+│   │   │   └── page.tsx             # Home page
+│   │   ├── types/                   # TypeScript type definitions
+│   │   ├── package.json             # Frontend dependencies
+│   │   ├── tailwind.config.ts       # Tailwind configuration
+│   │   └── tsconfig.json            # TypeScript configuration
+│   └── backend/                     # Python FastAPI backend
+│       ├── main.py                  # FastAPI application entry point
+│       ├── multi_agent.py           # Multi-agent orchestration system
+│       ├── agents/                  # Specialized AI agents
+│       │   ├── spec_agent.py        # Specification analysis agent
+│       │   ├── topology_agent.py    # Circuit topology design agent
+│       │   └── netlist_agent.py     # Netlist generation agent
+│       ├── graph/                   # Graph-based validation system
+│       │   ├── context.py           # Graph context management
+│       │   ├── patcher.py           # Graph patching operations
+│       │   ├── validators.py        # Validation logic
+│       │   ├── rulesets.py          # Rule set definitions
+│       │   └── store.py             # Graph storage
+│       ├── rules/                   # Circuit validation rules
+│       │   ├── engine.py            # Rules engine
+│       │   ├── base.py              # Base rule classes
+│       │   └── power_base.py        # Power-specific rules
+│       ├── schema/                  # Pydantic schema definitions
+│       │   ├── graph_patch_schema.py # Graph patch operations
+│       │   ├── netlist_schema.py    # Netlist data models
+│       │   ├── spec_schema.py       # Specification data models
+│       │   ├── topology_schema.py   # Topology data models
+│       │   └── violations_schema.py # Validation violation models
+│       ├── toolkit/                 # Core toolkit functionality
+│       │   └── toolkit.py           # Main toolkit class
+│       ├── tools/                   # External tool integrations
+│       │   └── run_tools.py         # KiCad and SPICE tool runners
+│       ├── PSU_24V_3A_PFC/          # Example KiCad project
+│       ├── requirements.txt         # Python dependencies
+│       └── Dockerfile               # Backend container definition
+├── docker-compose.yaml              # Multi-service orchestration
+├── package.json                     # Root package configuration
+└── README.md                        # This file
 ```
 
 ## 🛠️ Tech Stack
@@ -68,18 +77,23 @@ Korelia_agent/
 - **React**: React 19 with Server Components
 - **Styling**: Tailwind CSS + Shadcn UI
 - **TypeScript**: Full type safety
-- **State Management**: Zustand (when needed)
+- **AI Integration**: Vercel AI SDK for chat functionality
+- **State Management**: React hooks and context
 
 ### Backend
-- **Framework**: FastAPI
+- **Framework**: FastAPI with async/await
 - **Python**: 3.8+
-- **AI Integration**: Custom multi-agent system with LangGraph
+- **AI Integration**: LangGraph for multi-agent orchestration
 - **Circuit Processing**: NetworkX for graph-based analysis
 - **Validation**: Deterministic ERC/DRC rules engine
-- **Real-time**: WebSocket support
+- **Real-time**: WebSocket support for pipeline events
+- **External Tools**: KiCad CLI, NGSpice integration
 
 ### DevOps
 - **Containerization**: Docker + Docker Compose
+- **Database**: PostgreSQL for data persistence
+- **Cache**: Redis for session management
+- **Storage**: MinIO for file storage
 - **Development**: Hot reload for both frontend and backend
 
 ## 🚀 Getting Started
@@ -130,23 +144,33 @@ uvicorn main:app --reload --port 8000
 - Navigate to `/chat` to access the AI chat interface
 - Real-time conversation with specialized circuit design agents
 - Support for multi-step interactions and circuit analysis
+- Integration with Vercel AI SDK for streaming responses
 
 ### Pipeline Management
 - Visit `/projects/[id]` to view pipeline details
-- Real-time pipeline event monitoring
-- Visual pipeline representation
+- Real-time pipeline event monitoring via WebSocket
+- Visual pipeline representation with step-by-step progress
+- Support for circuit design workflows from spec to KiCad
 
-### SPICE Toolkit
-The SPICE toolkit provides:
-- **Parser**: Converts SPICE netlists to structured components
-- **Graph Builder**: Creates bipartite graphs for topology analysis
-- **Validation**: ERC/DRC rules checking (floating nodes, parallel sources, etc.)
-- **Layered Builder**: Incremental circuit construction with automatic validation
+### Multi-Agent System
+The system includes specialized agents:
+- **Spec Agent**: Analyzes circuit specifications and requirements
+- **Topology Agent**: Designs circuit topology based on specifications
+- **Netlist Agent**: Generates SPICE netlists from topology designs
+- **Graph Validation**: Automatic ERC/DRC rules checking
+
+### Circuit Design Pipeline
+1. **Specification Analysis**: Parse and validate circuit requirements
+2. **Topology Design**: Create circuit topology based on specifications
+3. **Netlist Generation**: Generate SPICE-compatible netlists
+4. **Simulation**: Run NGSpice simulations for validation
+5. **KiCad Integration**: Export to KiCad for PCB design
+6. **Documentation**: Generate design documentation
 
 ### API Endpoints
 - `POST /api/chat` - Chat with AI agents
-- `POST /api/pipeline/start` - Start new pipeline
-- `GET /api/pipeline/[id]/events` - Stream pipeline events
+- `POST /api/pipeline/start` - Start new design pipeline
+- `GET /api/pipeline/[id]/events` - Stream pipeline events via WebSocket
 
 ## 🔧 Development
 
@@ -195,17 +219,62 @@ If you encounter any issues or have questions:
 
 ## 🔄 Recent Updates
 
-- ✅ Multi-agent system with specialized circuit design agents
-- ✅ SPICE toolkit with graph-based validation and ERC/DRC rules
-- ✅ Layered netlist builder with incremental construction
-- ✅ Graph-based topology validation engine
-- ✅ Schema-based circuit representation and patching
-- ✅ FastAPI backend with LangGraph integration
-- ✅ Real-time chat interface with multi-step interactions
+- ✅ Multi-agent system with specialized circuit design agents (spec, topology, netlist)
+- ✅ Graph-based validation engine with deterministic ERC/DRC rules
+- ✅ LangGraph integration for agent orchestration
+- ✅ FastAPI backend with async/await patterns
+- ✅ Real-time chat interface with Vercel AI SDK integration
 - ✅ Pipeline management with WebSocket streaming
-- ✅ Docker containerization
-- ✅ TypeScript implementation
-- ✅ Modern UI with Tailwind CSS and Shadcn UI
+- ✅ KiCad CLI integration for PCB design workflow
+- ✅ NGSpice integration for circuit simulation
+- ✅ Docker containerization with multi-service support
+- ✅ TypeScript implementation with full type safety
+- ✅ Modern UI with Tailwind CSS and responsive design
+- ✅ Pydantic schema validation for data integrity
+- ✅ Graph-based circuit representation and patching
+- ✅ Example KiCad project included (PSU_24V_3A_PFC)
+
+---
+
+## 🏗️ Architecture Overview
+
+### Multi-Agent System
+The backend implements a sophisticated multi-agent system using LangGraph for orchestration:
+
+- **Spec Agent** (`agents/spec_agent.py`): Analyzes circuit specifications and requirements
+- **Topology Agent** (`agents/topology_agent.py`): Designs circuit topology based on specifications  
+- **Netlist Agent** (`agents/netlist_agent.py`): Generates SPICE netlists from topology designs
+
+### Graph-Based Validation
+The system uses NetworkX for graph-based circuit analysis:
+
+- **Graph Store** (`graph/store.py`): Manages circuit graph state
+- **Graph Patcher** (`graph/patcher.py`): Applies incremental changes to circuit graphs
+- **Validators** (`graph/validators.py`): Implements ERC/DRC validation rules
+- **Rules Engine** (`rules/engine.py`): Executes validation rule sets
+
+### Data Models
+Pydantic schemas ensure data integrity throughout the pipeline:
+
+- **Spec Schema** (`schema/spec_schema.py`): Circuit specification models
+- **Topology Schema** (`schema/topology_schema.py`): Circuit topology models
+- **Netlist Schema** (`schema/netlist_schema.py`): SPICE netlist models
+- **Graph Patch Schema** (`schema/graph_patch_schema.py`): Graph operation models
+
+### Frontend Architecture
+Next.js 15 App Router with modern React patterns:
+
+- **Server Components**: Default rendering on the server for performance
+- **Client Components**: Minimal client-side interactivity
+- **API Routes**: RESTful endpoints for backend communication
+- **WebSocket Integration**: Real-time pipeline event streaming
+
+### External Integrations
+- **KiCad CLI**: Direct integration for PCB design workflow
+- **NGSpice**: Circuit simulation and validation
+- **PostgreSQL**: Data persistence and session management
+- **Redis**: Caching and real-time data
+- **MinIO**: File storage for circuit designs
 
 ---
 
