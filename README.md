@@ -1,13 +1,15 @@
 # Korelia Agent
 
-A full-stack AI agent application built with Next.js 15, React 19, and Python FastAPI. This project provides a modern chat interface with real-time pipeline management and AI-powered interactions.
+A full-stack AI agent application for circuit design and analysis, built with Next.js 15, React 19, and Python FastAPI. This project provides a multi-agent system with SPICE netlist parsing, graph-based validation, and real-time pipeline management.
 
 ## 🚀 Features
 
+- **Multi-Agent System**: Specialized AI agents for circuit design (spec, topology, netlist, analytical sizing)
+- **SPICE Toolkit**: Advanced parser with graph-based validation and ERC/DRC rules
+- **Graph-Based Validation**: Automatic topology checking with deterministric ERC/DRC rules
+- **Layered Netlist Builder**: Incremental circuit construction with validation
 - **Modern Frontend**: Next.js 15 with React 19 and App Router
-- **AI Chat Interface**: Real-time chat with AI agents
-- **Pipeline Management**: Visual pipeline creation and monitoring
-- **Real-time Events**: WebSocket-based event streaming
+- **Real-time Pipeline**: Visual pipeline creation and monitoring with WebSocket streaming
 - **Modern UI**: Tailwind CSS with Shadcn UI components
 - **Type Safety**: Full TypeScript implementation
 - **Docker Support**: Containerized development and deployment
@@ -19,12 +21,38 @@ Korelia_agent/
 ├── apps/
 │   ├── frontend/          # Next.js 15 application
 │   │   ├── app/           # App Router pages and API routes
+│   │   │   ├── api/       # API routes (chat, pipeline)
+│   │   │   ├── chat/      # Chat interface
+│   │   │   └── projects/  # Project management
 │   │   ├── types/         # TypeScript type definitions
 │   │   └── package.json   # Frontend dependencies
 │   └── backend/           # Python FastAPI backend
-│       ├── main.py        # FastAPI application
-│       ├── deep_agent2.py # AI agent implementation
-│       ├── tools.py       # Agent tools and utilities
+│       ├── main.py        # FastAPI application entry
+│       ├── multi_agent.py # Multi-agent orchestration
+│       ├── spice_toolkit.py # SPICE parser & validation
+│       ├── agents/        # Specialized AI agents
+│       │   ├── spec_agent.py
+│       │   ├── topology_agent.py
+│       │   ├── netlist_agent.py
+│       │   └── analytical_sizer_agent.py
+│       ├── graph/         # Graph-based validation
+│       │   ├── context.py
+│       │   ├── patcher.py
+│       │   ├── validators.py
+│       │   ├── rulesets.py
+│       │   └── store.py
+│       ├── rules/         # Circuit validation rules
+│       │   ├── engine.py
+│       │   ├── base.py
+│       │   └── power_base.py
+│       ├── schema/        # Schema definitions
+│       │   ├── netlist_schema.py
+│       │   ├── topology_schema.py
+│       │   ├── sizing_schema.py
+│       │   └── violations_schema.py
+│       ├── tools/         # Agent tools
+│       │   ├── run_tools.py
+│       │   └── tools_graph.py
 │       └── requirements.txt
 ├── ProjectDocs/           # Project documentation
 │   ├── Build_Notes/       # Development progress tracking
@@ -45,7 +73,9 @@ Korelia_agent/
 ### Backend
 - **Framework**: FastAPI
 - **Python**: 3.8+
-- **AI Integration**: Custom agent implementation
+- **AI Integration**: Custom multi-agent system with LangGraph
+- **Circuit Processing**: NetworkX for graph-based analysis
+- **Validation**: Deterministic ERC/DRC rules engine
 - **Real-time**: WebSocket support
 
 ### DevOps
@@ -65,8 +95,8 @@ Korelia_agent/
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/YOUR_USERNAME/korelia-agent.git
-   cd korelia-agent
+   git clone https://github.com/Roger-korelia/korelia_test_agent.git
+   cd Korelia_agent
    ```
 
 2. **Start all services**
@@ -91,20 +121,27 @@ npm run dev
 ```bash
 cd apps/backend
 pip install -r requirements.txt
-python main.py
+uvicorn main:app --reload --port 8000
 ```
 
 ## 📖 Usage
 
 ### Chat Interface
 - Navigate to `/chat` to access the AI chat interface
-- Real-time conversation with AI agents
-- Support for multi-step interactions
+- Real-time conversation with specialized circuit design agents
+- Support for multi-step interactions and circuit analysis
 
 ### Pipeline Management
 - Visit `/projects/[id]` to view pipeline details
 - Real-time pipeline event monitoring
 - Visual pipeline representation
+
+### SPICE Toolkit
+The SPICE toolkit provides:
+- **Parser**: Converts SPICE netlists to structured components
+- **Graph Builder**: Creates bipartite graphs for topology analysis
+- **Validation**: ERC/DRC rules checking (floating nodes, parallel sources, etc.)
+- **Layered Builder**: Incremental circuit construction with automatic validation
 
 ### API Endpoints
 - `POST /api/chat` - Chat with AI agents
@@ -116,6 +153,8 @@ python main.py
 ### Project Structure Guidelines
 - **Frontend**: Follow Next.js 15 App Router patterns
 - **Backend**: FastAPI with async/await patterns
+- **Agents**: Modular, single-responsibility agents
+- **Validation**: Graph-based topology checking with deterministic rules
 - **Documentation**: Maintain build notes in `ProjectDocs/Build_Notes/`
 - **Code Quality**: TypeScript strict mode, ESLint, Prettier
 
@@ -123,6 +162,7 @@ python main.py
 - **Server Components First**: Use RSC where possible
 - **Minimal Client Components**: Only use `'use client'` when necessary
 - **Type Safety**: Comprehensive TypeScript coverage
+- **Validation**: Deterministic, graph-based circuit validation
 - **Performance**: Optimize for Core Web Vitals
 - **Accessibility**: WCAG 2.1 compliance
 
@@ -131,6 +171,7 @@ python main.py
 - **Build Notes**: Track development progress in `ProjectDocs/Build_Notes/`
 - **Context Files**: Project requirements in `ProjectDocs/contexts/`
 - **API Documentation**: Available at `/docs` when backend is running
+- **SPICE Toolkit**: Full documentation in `apps/backend/spice_toolkit.py`
 
 ## 🤝 Contributing
 
@@ -148,20 +189,24 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 If you encounter any issues or have questions:
 
-1. Check the [Issues](https://github.com/YOUR_USERNAME/korelia-agent/issues) page
+1. Check the [Issues](https://github.com/Roger-korelia/korelia_test_agent/issues) page
 2. Review the build notes in `ProjectDocs/Build_Notes/`
 3. Create a new issue with detailed information
 
 ## 🔄 Recent Updates
 
-- ✅ Initial project setup with Next.js 15 and React 19
-- ✅ FastAPI backend with AI agent integration
-- ✅ Real-time chat interface
-- ✅ Pipeline management system
+- ✅ Multi-agent system with specialized circuit design agents
+- ✅ SPICE toolkit with graph-based validation and ERC/DRC rules
+- ✅ Layered netlist builder with incremental construction
+- ✅ Graph-based topology validation engine
+- ✅ Schema-based circuit representation and patching
+- ✅ FastAPI backend with LangGraph integration
+- ✅ Real-time chat interface with multi-step interactions
+- ✅ Pipeline management with WebSocket streaming
 - ✅ Docker containerization
 - ✅ TypeScript implementation
 - ✅ Modern UI with Tailwind CSS and Shadcn UI
 
 ---
 
-Built with ❤️ using Next.js 15, React 19, and FastAPI
+Built with ❤️ using Next.js 15, React 19, FastAPI, and NetworkX
