@@ -1,11 +1,22 @@
 import React from "react";
+import Link from "next/link";
+
 export default function Home() {
   return (
-    <main className="p-6">
-      <h1 className="text-2xl font-semibold">Agents Platform</h1>
-      <div className="space-x-4 mt-4">
-        <a className="text-blue-600 underline" href="/projects/demo">Ir a proyecto demo</a>
-        <a className="text-blue-600 underline" href="/chat">Chat</a>
+    <main className="min-h-screen bg-gray-100 flex items-center justify-center">
+      <div className="max-w-md mx-auto p-6">
+        <div className="bg-white rounded-lg shadow-lg p-8 text-center">
+          <h1 className="text-3xl font-bold text-gray-800 mb-4">Multi-Agent Chat</h1>
+          <p className="text-gray-600 mb-6">
+            Test the electronics design multi-agent system
+          </p>
+          <Link 
+            href="/chat" 
+            className="inline-block bg-blue-600 text-white px-8 py-3 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            Start Chat
+          </Link>
+        </div>
       </div>
     </main>
   );

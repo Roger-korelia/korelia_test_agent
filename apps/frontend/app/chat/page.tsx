@@ -6,60 +6,83 @@ import { useCompletion } from "@ai-sdk/react";
 export default function ChatPage() {
   const { completion, input, handleInputChange, handleSubmit, isLoading } = useCompletion({
     api: "/api/chat",
-    onFinish: (_prompt, comp) => {
-      console.log("[chat-ui] onFinish", { comp });
-      if (comp) setHistory((h) => [...h, `AI: ${comp}`]);
-    },
-    onError: (err) => {
-      console.error("[chat-ui] onError", err);
-      setHistory((h) => [...h, `Error: ${err.message}`]);
-    },
   });
 
-  const [history, setHistory] = React.useState<string[]>([]);
-
-  const onSubmit = React.useCallback(
-    (e: any) => {
-      console.log("[chat-ui] onSubmit", { input });
-      if (input?.trim()) {
-        setHistory((h) => [...h, `You: ${input}`]);
-      }
-      handleSubmit(e);
-    },
-    [input, handleSubmit]
-  );
+  const [messages, setMessages] = React.useState<Array<{role: string, content: string}>>([]);
 
   React.useEffect(() => {
     if (completion) {
-      // Also reflect intermediate/streamed updates if provided
-      setHistory((h) => {
-        const last = h[h.length - 1] ?? "";
-        if (last.startsWith("AI: ")) {
-          const base = h.slice(0, -1);
-          return [...base, `AI: ${completion}`];
-        }
-        return [...h, `AI: ${completion}`];
-      });
+      setMessages(prev => [...prev, { role: "assistant", content: completion }]);
     }
   }, [completion]);
 
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (input?.trim()) {
+      setMessages(prev => [...prev, { role: "user", content: input }]);
+    }
+    handleSubmit(e);
+  };
+
   return (
-    <div className="p-6 max-w-2xl mx-auto space-y-4">
-      <h1 className="text-2xl font-semibold">Chat</h1>
-      <div className="space-y-2">
-        {history.map((line, idx) => (
-          <div key={idx} className="rounded border p-2 whitespace-pre-wrap">{line}</div>
-        ))}
+    <div className="min-h-screen bg-gray-100">
+      <div className="max-w-2xl mx-auto p-4">
+        <div className="bg-white rounded-lg shadow-lg h-screen flex flex-col">
+          <div className="p-4 border-b">
+            <h1 className="text-xl font-bold">Multi-Agent Chat</h1>
+          </div>
+          
+          <div className="flex-1 p-4 overflow-y-auto space-y-4">
+            {messages.length === 0 && (
+              <div className="text-center text-gray-500 py-8">
+                <p>Describe your electronics design task</p>
+                <p className="text-sm mt-2">Try: "Design a LED driver circuit"</p>
+              </div>
+            )}
+            
+            {messages.map((message, idx) => (
+              <div key={idx} className={`p-3 rounded-lg ${
+                message.role === "user" 
+                  ? "bg-blue-100 ml-8" 
+                  : "bg-gray-100 mr-8"
+              }`}>
+                <div className="font-semibold text-sm mb-1">
+                  {message.role === "user" ? "You" : "Assistant"}
+                </div>
+                <div className="whitespace-pre-wrap">{message.content}</div>
+              </div>
+            ))}
+            
+            {isLoading && (
+              <div className="bg-yellow-100 p-3 rounded-lg mr-8">
+                <div className="font-semibold text-sm mb-1">Assistant</div>
+                <div className="flex items-center space-x-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                  <span>Processing...</span>
+                </div>
+              </div>
+            )}
+          </div>
+          
+          <div className="p-4 border-t">
+            <form onSubmit={onSubmit} className="flex gap-2">
+              <input
+                className="flex-1 border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                value={input}
+                onChange={handleInputChange}
+                placeholder="Enter your message..."
+                disabled={isLoading}
+              />
+              <button 
+                disabled={isLoading || !input?.trim()} 
+                className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700 disabled:bg-gray-400"
+              >
+                Send
+              </button>
+            </form>
+          </div>
+        </div>
       </div>
-      <form onSubmit={onSubmit} className="flex gap-2">
-        <input
-          className="flex-1 border rounded px-3 py-2"
-          value={input}
-          onChange={handleInputChange}
-          placeholder="Say something..."
-        />
-        <button disabled={isLoading} className="border rounded px-3 py-2">{isLoading ? "Sending..." : "Send"}</button>
-      </form>
     </div>
   );
 }
