@@ -11,10 +11,15 @@ export default function ChatPage() {
   const [messages, setMessages] = React.useState<Array<{role: string, content: string}>>([]);
 
   React.useEffect(() => {
-    if (completion) {
-      setMessages(prev => [...prev, { role: "assistant", content: completion }]);
+    if (!isLoading && completion) {
+      // Only add to messages when loading is complete
+      setMessages(prev => {
+        // Remove any incomplete assistant message
+        const filtered = prev.filter(m => !(m.role === "assistant" && m.content === completion));
+        return [...filtered, { role: "assistant", content: completion }];
+      });
     }
-  }, [completion]);
+  }, [isLoading, completion]);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,7 +34,7 @@ export default function ChatPage() {
       <div className="max-w-2xl mx-auto p-4">
         <div className="bg-white rounded-lg shadow-lg h-screen flex flex-col">
           <div className="p-4 border-b">
-            <h1 className="text-xl font-bold">Multi-Agent Chat</h1>
+            <h1 className="text-xl font-bold">Electronics Design Agent</h1>
           </div>
           
           <div className="flex-1 p-4 overflow-y-auto space-y-4">
@@ -53,7 +58,14 @@ export default function ChatPage() {
               </div>
             ))}
             
-            {isLoading && (
+            {isLoading && completion && (
+              <div className="bg-gray-100 p-3 rounded-lg mr-8">
+                <div className="font-semibold text-sm mb-1">Assistant</div>
+                <div className="whitespace-pre-wrap">{completion}</div>
+              </div>
+            )}
+            
+            {isLoading && !completion && (
               <div className="bg-yellow-100 p-3 rounded-lg mr-8">
                 <div className="font-semibold text-sm mb-1">Assistant</div>
                 <div className="flex items-center space-x-2">

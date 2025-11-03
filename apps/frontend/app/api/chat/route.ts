@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 
-export const runtime = "edge";
+export const runtime = "nodejs";
 export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
@@ -22,9 +22,34 @@ export async function POST(req: NextRequest) {
   if (!resp.ok) {
     return new Response(await resp.text(), { status: resp.status });
   }
-  const data = await resp.json();
-  console.log("[chat-api] backend data", data);
-  return new Response(String(data.content ?? ""), {
+  
+  // Stream the response from backend
+  const stream = new ReadableStream({
+    async start(controller) {
+      const reader = resp.body?.getReader();
+      const decoder = new TextDecoder();
+      
+      if (!reader) {
+        controller.close();
+        return;
+      }
+      
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+      } catch (error) {
+        console.error("[chat-api] stream error", error);
+      } finally {
+        controller.close();
+      }
+    },
+  });
+  
+  return new Response(stream, {
     headers: {
       "Content-Type": "text/plain; charset=utf-8",
       "Cache-Control": "no-store",

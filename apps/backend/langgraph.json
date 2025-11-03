@@ -1,0 +1,7 @@
+{
+    "graphs": {
+      "eda_agent": "./agent.py:create_agent_graph"
+    },
+    "dependencies": ["./requirements.txt"],
+    "env": ".env"
+  }

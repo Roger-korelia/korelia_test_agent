@@ -3,13 +3,12 @@ import json
 import re
 import sys
 import tempfile
-import base64
-import datetime as dt
 from pathlib import Path
-from typing import Literal, Dict, Any, List, Optional, Annotated, TypedDict
+from typing import Literal, Dict, Any, List, Optional
 from subprocess import run, PIPE, TimeoutExpired
 from dotenv import load_dotenv
 from langchain_core.tools import tool
+from ..schema.spice_schema import SpiceAutorunInput
 
 load_dotenv()
 
@@ -17,276 +16,218 @@ load_dotenv()
 os.environ.setdefault("NGSPICE", r"C:\Program Files\Spice64\bin\ngspice.exe")
 os.environ.setdefault("KICAD_CLI", r"C:\Program Files\KiCad\8.0\bin\kicad-cli.exe")
 
+
 # =========================
 # BINARIES RESOLVERS
 # =========================
-"""
-def _resolve_ngspice():
-    "Prefiere ngspice_con.exe en Windows; cae a env NGSPICE o PATH."
-    import shutil
-    cand = os.getenv("NGSPICE")
-    if cand:
-        return cand.strip('"')
-    for name in ("ngspice_con.exe", "ngspice_con", "ngspice.exe", "ngspice"):
-        p = shutil.which(name)
-        if p:
-            return p
-    return None
 
-def _resolve_kicad_cli():
-    "Devuelve la ruta al binario de kicad-cli. Prioriza env var KICAD_CLI y si no, busca en PATH."
-    import shutil, platform
-    
-    # 1. Variable de entorno
-    cand = os.getenv("KICAD_CLI")
-    if cand:
-        cand = cand.strip('"')
-        if os.path.exists(cand):
-            return cand
-    
-    # 2. Buscar en PATH
-    for cmd in ["kicad-cli", "kicad-cli.exe"]:
-        result = shutil.which(cmd)
-        if result:
-            return result
-    
-    # 3. Buscar en ubicaciones comunes de Windows (solo si es Windows)
-    if platform.system() == "Windows":
-        common_paths = [
-            r"C:\Program Files\KiCad\8.0\bin\kicad-cli.exe",
-            r"C:\Program Files\KiCad\7.0\bin\kicad-cli.exe",
-            r"C:\Program Files (x86)\KiCad\8.0\bin\kicad-cli.exe",
-        ]
-        
-        for path in common_paths:
-            if os.path.exists(path):
-                return path
-    
-    return None
-"""
 def _resolve_ngspice():
     """Resolve ngspice binary path - works in both local and Docker."""
     import shutil
-    
-    # 1. Check environment variable first
     env_path = os.getenv("NGSPICE")
     if env_path and os.path.exists(env_path):
         return env_path
-    
-    # 2. Check common Docker/Linux paths
-    docker_paths = [
-        "/usr/local/bin/ngspice",
-        "/usr/bin/ngspice",
-        "/opt/ngspice/bin/ngspice"
-    ]
-    
-    for path in docker_paths:
+    for path in ["/usr/local/bin/ngspice", "/usr/bin/ngspice", "/opt/ngspice/bin/ngspice"]:
         if os.path.exists(path):
             return path
-    
-    # 3. Check Windows paths (for local development)
-    windows_paths = [
+    for path in [
         r"C:\Program Files\Spice64\bin\ngspice.exe",
-        r"C:\Program Files (x86)\Spice64\bin\ngspice.exe"
-    ]
-    
-    for path in windows_paths:
+        r"C:\Program Files (x86)\Spice64\bin\ngspice.exe",
+    ]:
         if os.path.exists(path):
             return path
-    
-    # 4. Fallback to PATH search
     return shutil.which("ngspice") or shutil.which("ngspice.exe")
+
 
 def _resolve_kicad_cli():
     """Resolve kicad-cli binary path - works in both local and Docker."""
     import shutil
-    
-    # 1. Check environment variable first
     env_path = os.getenv("KICAD_CLI")
     if env_path and os.path.exists(env_path):
         return env_path
-    
-    # 2. Check common Docker/Linux paths
-    docker_paths = [
-        "/usr/bin/kicad-cli",
-        "/snap/bin/kicad-cli",
-        "/usr/local/bin/kicad-cli"
-    ]
-    
-    for path in docker_paths:
+    for path in ["/usr/bin/kicad-cli", "/snap/bin/kicad-cli", "/usr/local/bin/kicad-cli"]:
         if os.path.exists(path):
             return path
-    
-    # 3. Check Windows paths (for local development)
-    windows_paths = [
+    for path in [
         r"C:\Program Files\KiCad\8.0\bin\kicad-cli.exe",
         r"C:\Program Files\KiCad\7.0\bin\kicad-cli.exe",
-        r"C:\Program Files (x86)\KiCad\8.0\bin\kicad-cli.exe"
-    ]
-    
-    for path in windows_paths:
+        r"C:\Program Files (x86)\KiCad\8.0\bin\kicad-cli.exe",
+    ]:
         if os.path.exists(path):
             return path
-    
-    # 4. Fallback to PATH search
     return shutil.which("kicad-cli") or shutil.which("kicad-cli.exe")
+
+
 # =========================
 # HELPER FUNCTIONS
 # =========================
 
+_SPICE_ANALYSIS_RE = re.compile(r"^\s*\.(op|tran|ac|dc)\b", re.I | re.M)
+
 def _guess_is_file_path(text: str) -> bool:
-    """Heurística para detectar si el texto es una ruta de archivo."""
-    if not text or len(text.strip()) == 0:
+    """Heurística mínima para detectar si el texto es una ruta existente."""
+    if not text or '\n' in text:
         return False
-    
-    # Si contiene caracteres de ruta típicos
-    if any(c in text for c in ['\\', '/', '.']):
-        # Si termina en extensión común de netlist
-        if any(text.strip().endswith(ext) for ext in ['.sp', '.cir', '.net', '.spice']):
-            return True
-        # Si parece una ruta absoluta o relativa
-        if text.strip().startswith(('.', '\\', '/', 'C:', 'D:', 'E:')):
-            return True
-    
+    t = text.strip()
+    if not t:
+        return False
+    if any(t.endswith(ext) for ext in (".sp", ".cir", ".net", ".spice")) and os.path.exists(t):
+        return True
+    if (t.startswith(("\\", "/", "C:", "D:", "E:")) and os.path.exists(t)):
+        return True
     return False
+
 
 def _guess_is_python(text: str) -> bool:
-    """Heurística para detectar si el texto es código Python."""
-    if not text or len(text.strip()) == 0:
+    """Heurística mínima para detectar si es código Python (sin confundir con SPICE)."""
+    if not text:
         return False
-    
-    # Palabras clave de Python/SPICE
-    python_keywords = ['import', 'from', 'def', 'class', 'if', 'for', 'while', 'try', 'except']
-    spice_keywords = ['.model', '.subckt', '.ends', '.lib', '.include', '.param']
-    
-    text_lower = text.lower()
-    
-    # Si contiene palabras clave de Python
-    if any(keyword in text_lower for keyword in python_keywords):
+    tl = text.lower()
+    if any(k in tl for k in ("import ", " from ", "def ", "class ", " try:", " except:", " while ", " for ")):
+        # Evita falsos positivos cuando claramente hay directivas SPICE
+        if any(k in tl for k in (".model", ".subckt", ".include", ".tran", ".ac", ".op", ".dc", ".control")):
+            return False
         return True
-    
-    # Si contiene palabras clave de SPICE, probablemente no es Python
-    if any(keyword in text_lower for keyword in spice_keywords):
-        return False
-    
     return False
 
+
 def _augment_env_for_ngspice(env: dict) -> dict:
-    """Añade variables de entorno necesarias para ngspice."""
+    """Añade path de ngspice al PATH si hace falta."""
     env_copy = env.copy()
-    
-    # Añadir directorio de ngspice al PATH si existe
     ngspice_path = _resolve_ngspice()
     if ngspice_path:
         ngspice_dir = os.path.dirname(ngspice_path)
-        if ngspice_dir not in env_copy.get("PATH", ""):
+        if ngspice_dir and ngspice_dir not in env_copy.get("PATH", ""):
             env_copy["PATH"] = f"{ngspice_dir};{env_copy.get('PATH', '')}"
-    
     return env_copy
 
-def _autopatch_netlist_min(netlist_text: str) -> str:
-    """Parchea netlist SPICE básico añadiendo .tran/.end si faltan."""
-    lines = netlist_text.strip().split('\n')
-    
-    # Buscar si ya tiene .tran
-    has_tran = any('.tran' in line.upper() for line in lines)
-    has_end = any(line.strip().upper() == '.END' for line in lines)
-    
-    # Si no tiene .tran, añadir uno básico
-    if not has_tran:
-        lines.append('.tran 1u 1m')
-    
-    # Si no tiene .end, añadirlo
-    if not has_end:
-        lines.append('.end')
-    
-    return '\n'.join(lines)
 
-def _inject_wrdata_control(netlist_text: str, wr_lines: List[str]) -> str:
-    """Inyecta líneas WRDATA en el netlist."""
-    lines = netlist_text.strip().split('\n')
-    
-    # Buscar la última línea .tran para insertar después
-    tran_idx = -1
-    for i, line in enumerate(lines):
-        if '.tran' in line.upper():
-            tran_idx = i
-    
-    # Si encontramos .tran, insertar después
-    if tran_idx >= 0:
-        lines.insert(tran_idx + 1, '')
-        lines.insert(tran_idx + 2, '.control')
-        for wr_line in wr_lines:
-            lines.insert(tran_idx + 3, wr_line)
-        lines.insert(tran_idx + 3 + len(wr_lines), '.endc')
+def _has_control_block(lines: List[str]) -> Optional[Dict[str, int]]:
+    """
+    Devuelve índices del bloque .control si existe: {'start': i, 'end': j}
+    Acepta espacios y mayúsculas/minúsculas.
+    """
+    start = end = None
+    for i, ln in enumerate(lines):
+        if start is None and ln.strip().lower().startswith(".control"):
+            start = i
+        elif start is not None and ln.strip().lower().startswith(".endc"):
+            end = i
+            break
+    if start is not None and end is not None and end > start:
+        return {"start": start, "end": end}
+    return None
+
+
+def _ensure_one_control_with_wrdata(netlist_text: str, wr_lines: List[str]) -> str:
+    """
+    Garantiza un único bloque .control … .endc.
+    - Si ya existe: inserta WRDATA antes de .endc (evita anidar).
+    - Si no existe: crea bloque mínimo con WRDATA en posición segura (tras el último análisis si hay, si no, antes de .end).
+    """
+    lines = netlist_text.splitlines()
+    ctrl = _has_control_block(lines)
+
+    # Normaliza .end al final
+    has_end = any(ln.strip().lower() == ".end" for ln in lines)
+    if not has_end:
+        lines.append(".end")
+
+    if ctrl:
+        # Inserta wrdata antes de .endc, evitando duplicados exactos
+        insert_at = ctrl["end"]
+        existing = set([ln.strip() for ln in lines[ctrl["start"]:ctrl["end"]+1]])
+        new_wr = [w for w in wr_lines if w.strip() not in existing]
+        for idx, w in enumerate(new_wr):
+            lines.insert(insert_at + idx, w)
+        return "\n".join(lines)
+
+    # No existe control → crear uno único
+    # Buscamos último análisis para colocarlo justo después (si existe)
+    last_ana_idx = -1
+    for i, ln in enumerate(lines):
+        if _SPICE_ANALYSIS_RE.match(ln):
+            last_ana_idx = i
+
+    ctrl_block = [".control", "set noaskquit", "set filetype=ascii", "set wr_singlescale"] + wr_lines + [".endc"]
+
+    if last_ana_idx >= 0:
+        insert_pos = last_ana_idx + 1
+        for ln in reversed(ctrl_block):
+            lines.insert(insert_pos, ln)
     else:
-        # Si no hay .tran, añadir al final antes de .end
-        end_idx = len(lines)
-        for i, line in enumerate(lines):
-            if line.strip().upper() == '.END':
-                end_idx = i
-                break
-        
-        lines.insert(end_idx, '')
-        lines.insert(end_idx + 1, '.control')
-        for wr_line in wr_lines:
-            lines.insert(end_idx + 2, wr_line)
-        lines.insert(end_idx + 2 + len(wr_lines), '.endc')
-    
-    return '\n'.join(lines)
+        # Inserta antes de .end final
+        end_idx = next((i for i, ln in enumerate(lines) if ln.strip().lower() == ".end"), len(lines))
+        for ln in reversed(ctrl_block):
+            lines.insert(end_idx, ln)
+
+    return "\n".join(lines)
+
+
+def _autopatch_minimal(netlist_text: str) -> str:
+    """
+    Ajuste mínimo, no intrusivo:
+    - Garantiza que exista .end
+    - Si NO hay ningún análisis (.op/.tran/.ac/.dc), añade un .op (neutral)
+    No toca fuentes ni añade .tran si ya hay análisis.
+    """
+    lines = [ln.rstrip() for ln in netlist_text.strip().splitlines() if ln.strip() != ""]
+    has_end = any(ln.strip().lower() == ".end" for ln in lines)
+    has_analysis = any(_SPICE_ANALYSIS_RE.match(ln) for ln in lines)
+
+    if not has_analysis:
+        lines.append(".op")
+    if not has_end:
+        lines.append(".end")
+    return "\n".join(lines)
+
 
 # =========================
 # SPICE TOOLS
 # =========================
 
 @tool("spice_autorun")
-def spice_autorun(input_text: str,
-                  mode: str = "auto",
-                  probes_json: str = '["v(VOUT)"]',
-                  node_expr: str = "v(VOUT)",
-                  from_fraction: str = "0.5",
-                  timeout_s: str = "120") -> str:
+def spice_autorun(input_data: SpiceAutorunInput) -> str:
     """
-    Una única tool para:
-    - Ejecutar código Python (PySpice/pyngspice) que recibes como string (modo 'python')
-    - Ejecutar netlist SPICE (texto o ruta) en batch con ngspice_con, autoparcheando .tran/.control/.end (modo 'netlist')
-    - 'auto': detecta por heurística
+    Ejecuta simulaciones SPICE (ngspice batch) o código Python (PySpice/pyngspice).
+    **Contrato para el LLM (construcción, no saneado):**
+      1) El netlist final debe ser **autocontenido** y válido para ngspice:
+         - Incluir modelos como `.model` inline o `.include` con **rutas absolutas** (no relativas).
+         - Terminar en `.end`.
+         - Si necesitas comandos de batch, usa **un único** bloque:
+             .control
+               set noaskquit
+               set filetype=ascii
+               set wr_singlescale
+               [tus wrdata/.print]
+               run
+             .endc
+      2) Si el análisis es transitorio, evita `AC <Vrms>` en fuentes: usa `SINE(0 Vp f)`.
+      3) Probes deben ser expresiones SPICE válidas para ngspice:
+         - Voltajes: `v(n)`, `v(n1,n2)` (no `v(Vsrc)` salvo que lo resuelvas a nodos).
+         - Corrientes: `i(Elemento)` **con paréntesis** (p.ej. `i(Rload)`).
+      4) Debe existir nodo de referencia `0` (tierra).
+      5) Este runner **no** repara netlists rotos. Solo:
+         - Garantiza `.end` y, si faltan análisis, añade `.op` (neutral).
+         - Inserta WRDATA de probes en un único bloque `.control ... .endc` (si ya existe, reusa; si no, crea uno mínimo).
 
-    Devuelve JSON con:
-      - method: 'python' | 'ngspice_wrdata'
-      - paths (workdir, netlist_path, log_path, script_path)
-      - probes[expr,csv,metrics{avg,rms,p2p}]
-      - measures (si hay .meas en el log)
-      - result (si run() devolvió dict en python)
-      - stdout_tail / stderr_tail
+    Parámetros (SpiceAutorunInput):
+      - input_text: Netlist, ruta .sp/.cir/.net, o código Python.
+      - mode: 'auto' | 'netlist' | 'python'
+      - probes: Lista de expresiones SPICE ['v(VOUT)', 'i(R1)']
+      - from_fraction: Fracción 0.0-1.0 para métricas en CSVs.
+      - timeout_s: Timeout (s).
+
+    Devuelve JSON con method, paths, probes, measures, y log.
     """
+    input_text = input_data.input_text
+    mode = input_data.mode
+    probes = input_data.probes if input_data.probes else [input_data.node_expr or "v(VOUT)"]
+    frac = input_data.from_fraction
+    timeout_s = str(input_data.timeout_s)
 
-    # Parse inputs
-    try:
-        probes = json.loads(probes_json)
-        if not isinstance(probes, list) or not probes:
-            probes = [node_expr]
-    except Exception:
-        probes = [node_expr]
-    try:
-        frac = float(from_fraction);  assert 0.0 <= frac < 1.0
-    except Exception:
-        frac = 0.5
-
-    # --- MODE DECISION ---
-    chosen = mode.lower().strip()
-    if chosen not in ("auto", "python", "netlist"):
-        chosen = "auto"
-    if chosen == "auto":
-        if _guess_is_file_path(input_text):
-            chosen = "netlist"
-        elif _guess_is_python(input_text):
-            chosen = "python"
-        else:
-            chosen = "netlist"  # por defecto, tratamos como netlist SPICE
-
-    # --- PYTHON (PySpice/pyngspice) ---
-    if chosen == "python":
+    # --- PYTHON MODE ---
+    if mode == "python" or (mode == "auto" and _guess_is_python(input_text)):
         workdir = tempfile.mkdtemp(prefix="pyng_")
         script_path = os.path.join(workdir, "snippet.py")
         wrapper = r"""
@@ -316,8 +257,10 @@ if "run" in globals() and callable(globals()["run"]):
         result_obj = None
         m = re.search(r"^RESULT_JSON:(\{.*\})\s*$", stdout, flags=re.M|re.S)
         if m:
-            try: result_obj = json.loads(m.group(1))
-            except Exception: result_obj = None
+            try:
+                result_obj = json.loads(m.group(1))
+            except Exception:
+                result_obj = None
 
         return json.dumps({
             "method": "python",
@@ -329,43 +272,42 @@ if "run" in globals() and callable(globals()["run"]):
             "result": result_obj
         }, ensure_ascii=False)
 
-    # --- NETLIST (texto o archivo) ---
-    # Resolve ngspice
+    # --- NETLIST MODE ---
     cmd_ngspice = _resolve_ngspice()
     if not cmd_ngspice:
         return json.dumps({"error": "ngspice no encontrado (define NGSPICE o añade a PATH)"}, ensure_ascii=False)
 
-    # Build workdir & paths
     workdir = tempfile.mkdtemp(prefix="spice_")
     netlist_path = os.path.join(workdir, "circuit.sp")
     log_path = os.path.join(workdir, "ngspice.log")
 
-    # Get netlist text: if 'input_text' is a file path, read it; else assume it's netlist code
+    # Obtener netlist
     if _guess_is_file_path(input_text):
         with open(input_text, "r", encoding="utf-8", errors="ignore") as f:
             net_txt = f.read()
     else:
         net_txt = input_text
 
-    # Sanear .tran/.end (no añadimos control aquí; lo insertamos con WRDATA)
-    base = _autopatch_netlist_min(net_txt)
+    # Ajuste mínimo (no intrusivo)
+    base = _autopatch_minimal(net_txt)
 
-    # Prepare WRDATA exports for probes
+    # Preparar WRDATA para probes (no normalizamos: exigimos que el agente ya pase expresiones válidas)
     wr_lines, csv_paths = [], []
     for expr in probes:
+        expr = str(expr)
         safe = re.sub(r"[^A-Za-z0-9_]+", "_", expr).strip("_").lower() or "sig"
-        csv_path = os.path.join(workdir, f"{safe}.csv")
-        csv_path_sp = csv_path.replace("\\", "/")  # ngspice tolera mejor slashes
-        wr_lines.append(f'wrdata "{csv_path_sp}" {expr}')
+        csv_path = os.path.join(workdir, f"{safe}.csv").replace("\\", "/")
+        wr_lines.append(f'wrdata "{csv_path}" {expr}')
         csv_paths.append((expr, csv_path))
 
-    code = _inject_wrdata_control(base, wr_lines)
+    # Un único .control .endc con wrdata (si existe, reusamos; si no, creamos)
+    code = _ensure_one_control_with_wrdata(base, wr_lines)
 
-    # Write patched netlist
+    # Escribir netlist final
     with open(netlist_path, "w", encoding="utf-8") as f:
         f.write(code)
 
-    # Run ngspice in batch, logging to file
+    # Ejecutar ngspice batch
     r = run([cmd_ngspice, "-b", "-o", log_path, netlist_path], stdout=PIPE, stderr=PIPE, text=True)
     try:
         with open(log_path, "r", encoding="utf-8", errors="ignore") as lf:
@@ -373,41 +315,41 @@ if "run" in globals() and callable(globals()["run"]):
     except Exception:
         log_txt = (r.stdout or "") + "\n" + (r.stderr or "")
 
-    # Parse .meas lines (si las hubiera)
+    # Parseo de medidas por .meas (si existen)
     FLOAT_RE = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
     meas_pairs = re.findall(r"(?mi)^\s*([A-Za-z_]\w*)\s*=\s*({})\s*$".format(FLOAT_RE), log_txt)
     measures = {k: float(v) for k, v in meas_pairs}
 
-    # Read CSVs and compute metrics
-    def _metrics_from_csv(path):
+    # Métricas simples desde WRDATA
+    def _metrics_from_csv(path: str):
         xs, ys = [], []
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
-                # WRDATA suele separar por TAB; usamos split() genérico para tolerar espacios
                 for line in f:
                     parts = line.strip().split()
-                    if len(parts) < 2: 
-                        continue
-                    try:
-                        xs.append(float(parts[0])); ys.append(float(parts[1]))
-                    except Exception:
-                        continue
+                    if len(parts) >= 2:
+                        try:
+                            xs.append(float(parts[0]))
+                            ys.append(float(parts[1]))
+                        except Exception:
+                            continue
         except Exception:
             return None
         if not ys:
             return None
-        n0 = int(len(ys) * frac)
+        n0 = int(len(ys) * (frac if 0.0 <= frac < 1.0 else 0.0))
         yw = ys[n0:] if n0 > 0 else ys
-        # avg/rms/p2p sin numpy
         n = len(yw)
-        avg = sum(yw)/n
-        rms = (sum(v*v for v in yw)/n) ** 0.5
-        p2p = (max(yw) - min(yw)) if yw else 0.0
+        if n == 0:
+            return None
+        avg = sum(yw) / n
+        rms = (sum(v*v for v in yw) / n) ** 0.5
+        p2p = (max(yw) - min(yw))
         return {"avg": float(avg), "rms": float(rms), "p2p": float(p2p), "samples": len(ys), "window_samples": len(yw)}
 
     probes_out = []
-    for expr, path in csv_paths:
-        probes_out.append({"expr": expr, "csv": path, "metrics": _metrics_from_csv(path)})
+    for expr, csv_path in csv_paths:
+        probes_out.append({"expr": expr, "csv": csv_path, "metrics": _metrics_from_csv(csv_path)})
 
     return json.dumps({
         "method": "ngspice_wrdata",
@@ -420,6 +362,7 @@ if "run" in globals() and callable(globals()["run"]):
         "log_tail": log_txt[-10000:]
     }, ensure_ascii=False)
 
+
 # =========================
 # KICAD TOOLS
 # =========================
@@ -427,18 +370,15 @@ if "run" in globals() and callable(globals()["run"]):
 @tool("kicad_cli_exec")
 def kicad_cli_exec(args_json: str) -> str:
     """Ejecuta kicad-cli con una lista de argumentos en JSON. Resuelve binario via KICAD_CLI o PATH."""
-
     cmd_kicad = _resolve_kicad_cli()
     if not cmd_kicad:
         return json.dumps({"error": "kicad-cli no encontrado (define KICAD_CLI o añade a PATH)"}, ensure_ascii=False)
-
     try:
         args = json.loads(args_json)
         if not isinstance(args, list):
             return json.dumps({"error": "args_json debe ser una lista JSON"}, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": f"JSON inválido: {e}"}, ensure_ascii=False)
-
     res = run([cmd_kicad] + args, stdout=PIPE, stderr=PIPE, text=True)
     return json.dumps({
         "returncode": res.returncode,
@@ -447,11 +387,12 @@ def kicad_cli_exec(args_json: str) -> str:
         "cmd": [cmd_kicad] + args
     }, ensure_ascii=False)
 
+
 @tool("kicad_project_manager")
 def kicad_project_manager(action: str, project_name: str = "Switched_PSU_24V_3A", content: str = "") -> str:
     """
     Manages KiCad project files in a consistent directory structure.
-    
+
     Actions:
     - "create_project": Creates a new KiCad project structure
     - "save_schematic": Saves schematic content to .kicad_sch file
@@ -459,30 +400,19 @@ def kicad_project_manager(action: str, project_name: str = "Switched_PSU_24V_3A"
     - "get_project_path": Returns the absolute path to the project file
     - "get_board_path": Returns the absolute path to the board file
     - "list_files": Lists all project files
-    
-    All files are saved in a consistent backend directory structure.
     """
-    
-    # Define the backend directory structure
-    backend_dir = Path(__file__).parent.parent  # This will be apps/backend
+    backend_dir = Path(__file__).parent.parent  # apps/backend
     project_dir = backend_dir / project_name
     project_file = project_dir / f"{project_name}.kicad_pro"
     schematic_file = project_dir / f"{project_name}.kicad_sch"
     board_file = project_dir / f"{project_name}.kicad_pcb"
-    
+
     try:
         if action == "create_project":
-            # Create project directory
             project_dir.mkdir(exist_ok=True)
-            
-            # Create basic project file if it doesn't exist
             if not project_file.exists():
-                with open(project_file, 'w') as f:
-                    f.write("(kicad_project\n")
-                    f.write(f'  (version 8)\n')
-                    f.write(f'  (generator kicad-cli)\n')
-                    f.write(f')\n')
-            
+                with open(project_file, 'w', encoding="utf-8") as f:
+                    f.write("(kicad_project\n  (version 8)\n  (generator kicad-cli)\n)\n")
             return json.dumps({
                 "status": "success",
                 "action": "create_project",
@@ -491,7 +421,7 @@ def kicad_project_manager(action: str, project_name: str = "Switched_PSU_24V_3A"
                 "board_path": str(board_file),
                 "project_dir": str(project_dir)
             }, ensure_ascii=False)
-            
+
         elif action == "save_schematic":
             project_dir.mkdir(exist_ok=True)
             with open(schematic_file, 'w', encoding='utf-8') as f:
@@ -502,32 +432,32 @@ def kicad_project_manager(action: str, project_name: str = "Switched_PSU_24V_3A"
                 "schematic_path": str(schematic_file),
                 "content_length": len(content)
             }, ensure_ascii=False)
-            
+
         elif action == "save_board":
             project_dir.mkdir(exist_ok=True)
             with open(board_file, 'w', encoding='utf-8') as f:
                 f.write(content)
             return json.dumps({
                 "status": "success",
-                "action": "save_board", 
+                "action": "save_board",
                 "board_path": str(board_file),
                 "content_length": len(content)
             }, ensure_ascii=False)
-            
+
         elif action == "get_project_path":
             return json.dumps({
                 "status": "success",
                 "project_path": str(project_file),
                 "exists": project_file.exists()
             }, ensure_ascii=False)
-            
+
         elif action == "get_board_path":
             return json.dumps({
                 "status": "success",
                 "board_path": str(board_file),
                 "exists": board_file.exists()
             }, ensure_ascii=False)
-            
+
         elif action == "list_files":
             files = []
             if project_dir.exists():
@@ -543,60 +473,43 @@ def kicad_project_manager(action: str, project_name: str = "Switched_PSU_24V_3A"
                 "project_dir": str(project_dir),
                 "files": files
             }, ensure_ascii=False)
-            
+
         else:
             return json.dumps({
                 "status": "error",
-                "message": f"Unknown action: {action}. Valid actions: create_project, save_schematic, save_board, get_project_path, get_board_path, list_files"
+                "message": "Unknown action. Valid: create_project, save_schematic, save_board, get_project_path, get_board_path, list_files"
             }, ensure_ascii=False)
-            
+
     except Exception as e:
-        return json.dumps({
-            "status": "error",
-            "action": action,
-            "error": str(e)
-        }, ensure_ascii=False)
+        return json.dumps({"status": "error", "action": action, "error": str(e)}, ensure_ascii=False)
+
 
 @tool("kicad_erc")
 def kicad_erc(project_path: str, timeout_s: str = "120") -> str:
     """Run KiCad ERC on a .kicad_pro/.kicad_sch project (resuelve kicad-cli por env/PATH)."""
-
     cmd_kicad = _resolve_kicad_cli()
     if not cmd_kicad:
         return json.dumps({
-            "error": "kicad-cli no encontrado. Instala KiCad desde https://www.kicad.org/download/ o define KICAD_CLI.",
-            "suggestion": "Descarga e instala KiCad, luego define la variable de entorno KICAD_CLI con la ruta al ejecutable."
+            "error": "kicad-cli no encontrado. Instala KiCad o define KICAD_CLI.",
+            "suggestion": "Descarga e instala KiCad y define KICAD_CLI con la ruta del ejecutable."
         }, ensure_ascii=False)
 
-    # Resolve project path - buscar en ubicaciones genéricas
     resolved_path = project_path
     if not os.path.isabs(project_path):
-        # Buscar en directorio actual y subdirectorios
         backend_dir = Path(__file__).parent.parent
-        possible_paths = [
-            project_path,  # Directorio actual
-            backend_dir / project_path,  # Directorio backend
-            # Buscar recursivamente en subdirectorios del backend
-        ]
-        
-        # Añadir búsqueda recursiva en subdirectorios
-        for subdir in backend_dir.iterdir():
-            if subdir.is_dir():
-                possible_paths.append(subdir / project_path)
-        
-        for path in possible_paths:
-            if os.path.exists(path):
-                resolved_path = os.path.abspath(path)
+        candidates = [project_path, backend_dir / project_path]
+        for sub in backend_dir.iterdir():
+            if sub.is_dir():
+                candidates.append(sub / project_path)
+        for p in candidates:
+            if os.path.exists(p):
+                resolved_path = os.path.abspath(p)
                 break
         else:
-            return json.dumps({
-                "error": f"Project file not found: {project_path}",
-                "searched_paths": [str(p) for p in possible_paths[:5]]  # Solo mostrar los primeros 5
-            }, ensure_ascii=False)
+            return json.dumps({"error": f"Project file not found: {project_path}"}, ensure_ascii=False)
 
     try:
-        res = run([cmd_kicad, "sch", "erc", "--project", resolved_path],
-                  stdout=PIPE, stderr=PIPE, text=True, timeout=int(timeout_s))
+        res = run([cmd_kicad, "sch", "erc", "--project", resolved_path], stdout=PIPE, stderr=PIPE, text=True, timeout=int(timeout_s))
         return json.dumps({
             "returncode": res.returncode,
             "stdout": (res.stdout or "")[-10000:],
@@ -605,53 +518,37 @@ def kicad_erc(project_path: str, timeout_s: str = "120") -> str:
             "original_path": project_path
         }, ensure_ascii=False)
     except FileNotFoundError:
-        return json.dumps({
-            "error": f"kicad-cli no se puede ejecutar: {cmd_kicad}",
-            "suggestion": "Verifica que KiCad esté instalado correctamente y la ruta sea válida."
-        }, ensure_ascii=False)
+        return json.dumps({"error": f"kicad-cli no se puede ejecutar: {cmd_kicad}"}, ensure_ascii=False)
     except TimeoutExpired:
         return json.dumps({"error": f"ERC timeout > {timeout_s}s"}, ensure_ascii=False)
+
 
 @tool("kicad_drc")
 def kicad_drc(board_path: str, timeout_s: str = "120") -> str:
     """Run KiCad DRC list on a .kicad_pcb board (resuelve kicad-cli por env/PATH)."""
-
     cmd_kicad = _resolve_kicad_cli()
     if not cmd_kicad:
         return json.dumps({
-            "error": "kicad-cli no encontrado. Instala KiCad desde https://www.kicad.org/download/ o define KICAD_CLI.",
-            "suggestion": "Descarga e instala KiCad, luego define la variable de entorno KICAD_CLI con la ruta al ejecutable."
+            "error": "kicad-cli no encontrado. Instala KiCad o define KICAD_CLI.",
+            "suggestion": "Descarga e instala KiCad y define KICAD_CLI con la ruta del ejecutable."
         }, ensure_ascii=False)
 
-    # Resolve board path - buscar en ubicaciones genéricas
     resolved_path = board_path
     if not os.path.isabs(board_path):
-        # Buscar en directorio actual y subdirectorios
         backend_dir = Path(__file__).parent.parent
-        possible_paths = [
-            board_path,  # Directorio actual
-            backend_dir / board_path,  # Directorio backend
-            # Buscar recursivamente en subdirectorios del backend
-        ]
-        
-        # Añadir búsqueda recursiva en subdirectorios
-        for subdir in backend_dir.iterdir():
-            if subdir.is_dir():
-                possible_paths.append(subdir / board_path)
-        
-        for path in possible_paths:
-            if os.path.exists(path):
-                resolved_path = os.path.abspath(path)
+        candidates = [board_path, backend_dir / board_path]
+        for sub in backend_dir.iterdir():
+            if sub.is_dir():
+                candidates.append(sub / board_path)
+        for p in candidates:
+            if os.path.exists(p):
+                resolved_path = os.path.abspath(p)
                 break
         else:
-            return json.dumps({
-                "error": f"Board file not found: {board_path}",
-                "searched_paths": [str(p) for p in possible_paths[:5]]  # Solo mostrar los primeros 5
-            }, ensure_ascii=False)
+            return json.dumps({"error": f"Board file not found: {board_path}"}, ensure_ascii=False)
 
     try:
-        res = run([cmd_kicad, "pcb", "drclist", "--board", resolved_path],
-                  stdout=PIPE, stderr=PIPE, text=True, timeout=int(timeout_s))
+        res = run([cmd_kicad, "pcb", "drclist", "--board", resolved_path], stdout=PIPE, stderr=PIPE, text=True, timeout=int(timeout_s))
         return json.dumps({
             "returncode": res.returncode,
             "stdout": (res.stdout or "")[-10000:],
@@ -660,20 +557,18 @@ def kicad_drc(board_path: str, timeout_s: str = "120") -> str:
             "original_path": board_path
         }, ensure_ascii=False)
     except FileNotFoundError:
-        return json.dumps({
-            "error": f"kicad-cli no se puede ejecutar: {cmd_kicad}",
-            "suggestion": "Verifica que KiCad esté instalado correctamente y la ruta sea válida."
-        }, ensure_ascii=False)
+        return json.dumps({"error": f"kicad-cli no se puede ejecutar: {cmd_kicad}"}, ensure_ascii=False)
     except TimeoutExpired:
         return json.dumps({"error": f"DRC timeout > {timeout_s}s"}, ensure_ascii=False)
 
+
 # =========================
-# EXPORT TOOLS FOR USE IN OTHER MODULES
+# EXPORT TOOLS
 # =========================
 
 __all__ = [
     'spice_autorun',
-    'kicad_cli_exec', 
+    'kicad_cli_exec',
     'kicad_project_manager',
     'kicad_erc',
     'kicad_drc',

@@ -1,0 +1,17 @@
+[project]
+name = "korelia-agent"
+version = "0.1.0"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic",
+    "langgraph",
+    "langchain-openai",
+    "langchain",
+    "langchain-core",
+    "python-dotenv",
+    "networkx",
+]
+
+[tool.setuptools]
+packages = ["apps"]
